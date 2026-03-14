@@ -3,6 +3,7 @@ import fastifyWebsocket from '@fastify/websocket';
 import authRoutes from './routes/auth';
 import wsRoutes from './routes/ws';
 import messageRoutes from './routes/messages';
+import fileRoutes from './routes/files';
 
 const fastify = Fastify({ logger: true });
 
@@ -13,6 +14,7 @@ fastify.register(fastifyWebsocket);
 fastify.register(authRoutes);
 fastify.register(wsRoutes);
 fastify.register(messageRoutes);
+fastify.register(fileRoutes);
 
 // Health check
 fastify.get('/ping', async (request, reply) => {
