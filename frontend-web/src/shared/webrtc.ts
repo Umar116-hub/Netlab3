@@ -2,8 +2,12 @@ export class WebRTCTransferService {
   private peerConnections = new Map<string, RTCPeerConnection>();
   private dataChannels = new Map<string, RTCDataChannel>();
 
+  private sendSignal: (targetDeviceId: string, payload: any) => void;
+
   // A signaling server hook would inject this function
-  constructor(private sendSignal: (targetDeviceId: string, payload: any) => void) {}
+  constructor(sendSignal: (targetDeviceId: string, payload: any) => void) {
+    this.sendSignal = sendSignal;
+  }
 
   /**
    * Initialize a connection as the Sender
@@ -88,10 +92,10 @@ export class WebRTCTransferService {
   /**
    * Expose public send command
    */
-  sendData(targetDeviceId: string, data: string | ArrayBuffer) {
+  sendData(targetDeviceId: string, data: string | Blob | ArrayBuffer | ArrayBufferView) {
     const dc = this.dataChannels.get(targetDeviceId);
     if (dc && dc.readyState === 'open') {
-      dc.send(data);
+      dc.send(data as any);
     } else {
       throw new Error("Data channel not open");
     }
