@@ -1,0 +1,7 @@
+{
+  "username": "testuser",
+  "password": "testpass",
+  "device_id": "testdevice",
+  "identity_key_public": "MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI=",
+  "identity_key_fingerprint": "fingerprint123"
+}

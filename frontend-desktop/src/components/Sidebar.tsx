@@ -1,14 +1,16 @@
 import { useState } from 'react';
-import { Search, Edit } from 'lucide-react';
-import type { Contact } from '../App';
+import { Search, Edit, LogOut } from 'lucide-react';
+import type { DesktopContact } from '../context/DesktopNetProvider';
 
 interface SidebarProps {
-  contacts: Contact[];
+  contacts: DesktopContact[];
   activeContactId: string | null;
   onSelectContact: (id: string) => void;
+  currentUser?: string;
+  onLogout?: () => void;
 }
 
-const Sidebar = ({ contacts, activeContactId, onSelectContact }: SidebarProps) => {
+const Sidebar = ({ contacts, activeContactId, onSelectContact, currentUser, onLogout }: SidebarProps) => {
   const [searchQuery, setSearchQuery] = useState('');
 
   const filteredContacts = contacts.filter(c => 
@@ -18,10 +20,20 @@ const Sidebar = ({ contacts, activeContactId, onSelectContact }: SidebarProps) =
   return (
     <div className="sidebar">
       <div className="sidebar-header">
-        <h1>NetLab Chat</h1>
-        <button className="icon-btn" title="New Chat">
-          <Edit size={20} />
-        </button>
+        <div className="sidebar-header-left">
+          <h1>NetLab LAN (Native)</h1>
+          {currentUser && <span className="sidebar-username">{currentUser}</span>}
+        </div>
+        <div className="sidebar-header-actions">
+          <button className="icon-btn" title="New Chat">
+            <Edit size={20} />
+          </button>
+          {onLogout && (
+            <button className="icon-btn" title="Sign out" onClick={onLogout}>
+              <LogOut size={18} />
+            </button>
+          )}
+        </div>
       </div>
       
       <div className="search-container">
@@ -56,7 +68,7 @@ const Sidebar = ({ contacts, activeContactId, onSelectContact }: SidebarProps) =
         ))}
         {filteredContacts.length === 0 && (
           <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-secondary)' }}>
-            No peers found.
+            No peers found on LAN.
           </div>
         )}
       </div>

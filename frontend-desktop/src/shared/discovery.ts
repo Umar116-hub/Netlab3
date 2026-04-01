@@ -1,5 +1,6 @@
 import dgram from 'dgram';
-import { P2PDiscoveryPacket } from '../../../shared/types/p2p';
+import os from 'os';
+import type { P2PDiscoveryPacket } from '@shared/types/p2p.js';
 
 const BROADCAST_PORT = 54545;
 const BROADCAST_ADDR = '255.255.255.255';
@@ -12,7 +13,7 @@ export class DiscoveryService {
   private myProfile: P2PDiscoveryPacket | null = null;
   private intervalTimer: NodeJS.Timeout | null = null;
 
-  start(profile: P2PDiscoveryPacket) {
+  start(profile: P2PDiscoveryPacket, onPeerDiscovered?: (ip: string, packet: P2PDiscoveryPacket) => void) {
     this.myProfile = profile;
 
     this.socket.on('message', (msg, rinfo) => {
@@ -26,7 +27,9 @@ export class DiscoveryService {
           info: packet
         });
         
-        console.log(`Discovered Peer: ${packet.display_name} @ ${rinfo.address}`);
+        if (onPeerDiscovered) {
+          onPeerDiscovered(rinfo.address, packet);
+        }
       } catch (err) { }
     });
 
@@ -43,6 +46,22 @@ export class DiscoveryService {
   private broadcast() {
     if (!this.myProfile) return;
     const msg = Buffer.from(JSON.stringify(this.myProfile));
+
+    const interfaces = os.networkInterfaces();
+    for (const name in interfaces) {
+      const ifaceList = interfaces[name];
+      if (!ifaceList) continue;
+
+      for (const iface of ifaceList) {
+        if (iface.family === 'IPv4' && !iface.internal) {
+          // Calculate subnet broadcast (assuming /24 which is default for LANs)
+          const subnetBroadcast = iface.address.split('.').slice(0, 3).join('.') + '.255';
+          this.socket.send(msg, 0, msg.length, BROADCAST_PORT, subnetBroadcast);
+        }
+      }
+    }
+
+    // Fallback to global broadcast
     this.socket.send(msg, 0, msg.length, BROADCAST_PORT, BROADCAST_ADDR);
   }
 

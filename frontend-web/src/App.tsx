@@ -1,4 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useAuth, useWebSocket } from './context/AuthContext';
+import AuthPage from './pages/AuthPage';
 import Sidebar from './components/Sidebar';
 import ChatArea from './components/ChatArea';
 
@@ -16,37 +18,54 @@ export interface Message {
   timestamp: string;
 }
 
-const MOCK_CONTACTS: Contact[] = [
-  { id: '1', name: 'Alice (Laptop)', status: 'online', lastMessage: 'Hey, did you get the file?' },
-  { id: '2', name: 'Bob (Desktop)', status: 'offline', lastMessage: 'See you tomorrow.' },
-  { id: '3', name: 'Charlie (Phone)', status: 'online', lastMessage: 'Sending the zip now...' },
-];
+import { api } from './lib/api';
 
-const MOCK_MESSAGES: Record<string, Message[]> = {
-  '1': [
-    { id: 'm1', senderId: '1', text: 'Hey, did you get the file?', timestamp: '10:30 AM' },
-    { id: 'm2', senderId: 'me', text: 'Yes! Downloading it now. Thanks!', timestamp: '10:31 AM' },
-  ],
-  '2': [
-    { id: 'm3', senderId: 'me', text: 'Are we still on for the meeting?', timestamp: 'Yesterday' },
-    { id: 'm4', senderId: '2', text: 'See you tomorrow.', timestamp: 'Yesterday' },
-  ],
-  '3': [
-    { id: 'm5', senderId: '3', text: 'Sending the zip now...', timestamp: '11:45 AM' },
-  ],
-};
+function ChatApp() {
+  const { username, logout } = useAuth();
+  const { isConnected, send, addListener, removeListener } = useWebSocket();
 
-function App() {
   const [activeContactId, setActiveContactId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Record<string, Message[]>>(MOCK_MESSAGES);
+  const [messages, setMessages] = useState<Record<string, Message[]>>({});
+  const [contacts, setContacts] = useState<Contact[]>([]);
 
-  const activeContact = MOCK_CONTACTS.find(c => c.id === activeContactId) || null;
-  const activeMessages = activeContactId ? (messages[activeContactId] || []) : [];
+  // Handle incoming WS messages via listener
+  useEffect(() => {
+    const handleMessage = (msg: any) => {
+      if (msg.type === 'chat_message' && msg.from) {
+        const senderId = msg.from;
+        const newMsg: Message = {
+          id: Date.now().toString(),
+          senderId,
+          text: msg.text ?? '',
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        };
+        setMessages(prev => ({
+          ...prev,
+          [senderId]: [...(prev[senderId] ?? []), newMsg],
+        }));
+      }
+    };
 
+    addListener(handleMessage);
+    return () => removeListener(handleMessage);
+  }, [addListener, removeListener]);
+
+  // Fetch real contacts on load
+  useEffect(() => {
+    console.log(`[Discovery] Fetching contacts for ${username}...`);
+    api.getDiscoveryContacts().then(allUsers => {
+      console.log(`[Discovery] Found ${allUsers.length} total users:`, allUsers);
+      const filtered = allUsers.filter(u => u.name !== username);
+      console.log(`[Discovery] Setting contacts (filtered self):`, filtered);
+      setContacts(filtered);
+    }).catch(err => {
+      console.error('[Discovery] Failed to fetch contacts:', err);
+    });
+  }, [username]);
   const handleSendMessage = (text: string) => {
     if (!activeContactId) return;
 
-    const newMessage: Message = {
+    const newMsg: Message = {
       id: Date.now().toString(),
       senderId: 'me',
       text,
@@ -55,24 +74,42 @@ function App() {
 
     setMessages(prev => ({
       ...prev,
-      [activeContactId]: [...(prev[activeContactId] || []), newMessage],
+      [activeContactId]: [...(prev[activeContactId] ?? []), newMsg],
     }));
+
+    // Send over WebSocket if connected
+    send({ type: 'chat_message', to: activeContactId, text });
   };
+
+  const activeContact = contacts.find(c => c.id === activeContactId) ?? null;
+  const activeMessages = activeContactId ? (messages[activeContactId] ?? []) : [];
 
   return (
     <div className="layout-container">
-      <Sidebar 
-        contacts={MOCK_CONTACTS} 
-        activeContactId={activeContactId} 
-        onSelectContact={setActiveContactId} 
+      {/* Connection status badge */}
+      <div className={`ws-status ${isConnected ? 'connected' : 'disconnected'}`}>
+        {isConnected ? '● Connected' : '○ Offline'}
+      </div>
+
+      <Sidebar
+        contacts={contacts}
+        activeContactId={activeContactId}
+        onSelectContact={setActiveContactId}
+        currentUser={username ?? 'You'}
+        onLogout={logout}
       />
-      <ChatArea 
-        contact={activeContact} 
-        messages={activeMessages} 
-        onSendMessage={handleSendMessage} 
+      <ChatArea
+        contact={activeContact}
+        messages={activeMessages}
+        onSendMessage={handleSendMessage}
       />
     </div>
   );
+}
+
+function App() {
+  const { token } = useAuth();
+  return token ? <ChatApp /> : <AuthPage />;
 }
 
 export default App;

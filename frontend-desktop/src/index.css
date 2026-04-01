@@ -412,3 +412,268 @@ html, body, #root {
   backdrop-filter: blur(12px);
   border: 1px solid rgba(255, 255, 255, 0.05);
 }
+
+/* ---- Auth Page ---- */
+.auth-page {
+  height: 100vh;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(ellipse at 60% 40%, rgba(99,102,241,0.12), transparent 60%),
+              radial-gradient(ellipse at 20% 80%, rgba(139,92,246,0.08), transparent 55%),
+              var(--bg-main);
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 400px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  padding: 40px;
+  box-shadow: 0 24px 48px rgba(0,0,0,0.4);
+  animation: fadeIn 0.4s ease forwards;
+}
+
+.auth-logo {
+  text-align: center;
+  margin-bottom: 32px;
+}
+
+.auth-logo-icon {
+  font-size: 2.5rem;
+  display: block;
+  margin-bottom: 8px;
+}
+
+.auth-logo h1 {
+  font-size: 1.6rem;
+  font-weight: 700;
+  background: linear-gradient(135deg, #a5b4fc, #c4b5fd);
+  background-clip: text;
+  color: transparent;
+  margin-bottom: 4px;
+}
+
+.auth-logo p {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.auth-tabs {
+  display: flex;
+  background: var(--bg-main);
+  border-radius: 8px;
+  padding: 4px;
+  margin-bottom: 28px;
+}
+
+.auth-tab {
+  flex: 1;
+  padding: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 0.9rem;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.auth-tab.active {
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.auth-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.auth-field label {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.auth-field input {
+  padding: 12px 14px;
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.95rem;
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.auth-field input:focus {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px rgba(99,102,241,0.2);
+}
+
+.auth-error {
+  background: rgba(239,68,68,0.1);
+  border: 1px solid rgba(239,68,68,0.3);
+  color: #fca5a5;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+
+.auth-submit {
+  padding: 12px;
+  background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s ease, transform 0.1s ease;
+  margin-top: 4px;
+}
+
+.auth-submit:hover:not(:disabled) {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
+.auth-submit:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* ---- WS Status Badge ---- */
+.ws-status {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  z-index: 100;
+  pointer-events: none;
+  transition: all 0.3s ease;
+}
+
+.ws-status.connected {
+  background: rgba(16,185,129,0.15);
+  color: #6ee7b7;
+  border: 1px solid rgba(16,185,129,0.3);
+}
+
+.ws-status.disconnected {
+  background: rgba(239,68,68,0.1);
+  color: #fca5a5;
+  border: 1px solid rgba(239,68,68,0.2);
+}
+
+/* ---- Sidebar updates ---- */
+.sidebar-header-left { display: flex; flex-direction: column; gap: 2px; }
+.sidebar-header-actions { display: flex; gap: 4px; align-items: center; }
+.sidebar-username { font-size: 0.75rem; color: var(--text-secondary); font-weight: 400; }
+/* ---- File Transfer UI ---- */
+.transfer-overlay {
+  position: absolute;
+  top: 80px;
+  right: 24px;
+  width: 280px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  z-index: 50;
+}
+
+.transfer-item {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 12px;
+  box-shadow: 0 8px 16px rgba(0,0,0,0.3);
+  animation: fadeIn 0.3s ease;
+}
+
+.transfer-info {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.transfer-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+
+.transfer-size {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.progress-container {
+  height: 6px;
+  background: var(--bg-main);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.progress-bar {
+  height: 100%;
+  background: var(--message-sent);
+  transition: width 0.3s ease;
+}
+
+.transfer-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.transfer-btn {
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s ease;
+}
+
+.transfer-btn.accept {
+  background: var(--success);
+  color: white;
+}
+
+.transfer-btn.reject {
+  background: rgba(239, 68, 68, 0.1);
+  color: #fca5a5;
+}
+
+.transfer-status {
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-align: right;
+}
+
+.status-active { color: var(--accent-primary); }
+.status-completed { color: var(--success); }
+.status-error { color: var(--error); }

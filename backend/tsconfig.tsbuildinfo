@@ -1,0 +1,1 @@
+{"root":["./src/index.ts","./src/config/db.ts","./src/config/initdb.ts","./src/routes/auth.ts","./src/routes/files.ts","./src/routes/messages.ts","./src/routes/ws.ts"],"errors":true,"version":"5.9.3"}

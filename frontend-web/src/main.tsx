@@ -1,10 +1,18 @@
-import { StrictMode } from 'react'
-import { createRoot } from 'react-dom/client'
-import './index.css'
-import App from './App.tsx'
+import { StrictMode } from 'react';
+import { createRoot } from 'react-dom/client';
+import App from './App.tsx';
+import './index.css';
+import { AuthProvider, WebSocketProvider } from './context/AuthContext.tsx';
+import { TransferProvider } from './context/TransferContext.tsx';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <AuthProvider>
+      <WebSocketProvider>
+        <TransferProvider>
+          <App />
+        </TransferProvider>
+      </WebSocketProvider>
+    </AuthProvider>
   </StrictMode>,
-)
+);

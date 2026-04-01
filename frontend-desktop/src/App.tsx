@@ -1,13 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { DesktopNetProvider, useDesktopNet } from './context/DesktopNetProvider';
 import Sidebar from './components/Sidebar';
 import ChatArea from './components/ChatArea';
-
-export interface Contact {
-  id: string;
-  name: string;
-  status: 'online' | 'offline';
-  lastMessage?: string;
-}
 
 export interface Message {
   id: string;
@@ -16,37 +10,42 @@ export interface Message {
   timestamp: string;
 }
 
-const MOCK_CONTACTS: Contact[] = [
-  { id: '1', name: 'Alice (Laptop)', status: 'online', lastMessage: 'Hey, did you get the file?' },
-  { id: '2', name: 'Bob (Desktop)', status: 'offline', lastMessage: 'See you tomorrow.' },
-  { id: '3', name: 'Charlie (Phone)', status: 'online', lastMessage: 'Sending the zip now...' },
-];
-
-const MOCK_MESSAGES: Record<string, Message[]> = {
-  '1': [
-    { id: 'm1', senderId: '1', text: 'Hey, did you get the file?', timestamp: '10:30 AM' },
-    { id: 'm2', senderId: 'me', text: 'Yes! Downloading it now. Thanks!', timestamp: '10:31 AM' },
-  ],
-  '2': [
-    { id: 'm3', senderId: 'me', text: 'Are we still on for the meeting?', timestamp: 'Yesterday' },
-    { id: 'm4', senderId: '2', text: 'See you tomorrow.', timestamp: 'Yesterday' },
-  ],
-  '3': [
-    { id: 'm5', senderId: '3', text: 'Sending the zip now...', timestamp: '11:45 AM' },
-  ],
-};
-
-function App() {
+function P2PApp() {
+  const { myName, contacts, sendMessage } = useDesktopNet();
   const [activeContactId, setActiveContactId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Record<string, Message[]>>(MOCK_MESSAGES);
+  const [messages, setMessages] = useState<Record<string, Message[]>>({});
 
-  const activeContact = MOCK_CONTACTS.find(c => c.id === activeContactId) || null;
-  const activeMessages = activeContactId ? (messages[activeContactId] || []) : [];
+  // When IPC direct-signaling comes in, we should really listen inside Provider and export it,
+  // but for hackability let's listen to IPC direct here for text chat.
+  // Actually, we should just read from Provider. 
+  useEffect(() => {
+     const ipcR = (window as any).require ? (window as any).require('electron').ipcRenderer : null;
+     if (!ipcR) return;
 
-  const handleSendMessage = (text: string) => {
+     const textHandler = (_e: any, { payload }: any) => {
+         if (payload.type === 'chat') {
+            const senderId = payload.from;
+            const newMsg: Message = {
+                id: Date.now().toString(),
+                senderId,
+                text: payload.text,
+                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            };
+            setMessages(prev => ({
+                ...prev,
+                [senderId]: [...(prev[senderId] ?? []), newMsg],
+            }));
+         }
+     };
+
+     ipcR.on('p2p:receive-direct-signaling', textHandler);
+     return () => ipcR.removeListener('p2p:receive-direct-signaling', textHandler);
+  }, []);
+
+  const handleSendMessage = async (text: string) => {
     if (!activeContactId) return;
 
-    const newMessage: Message = {
+    const newMsg: Message = {
       id: Date.now().toString(),
       senderId: 'me',
       text,
@@ -55,23 +54,42 @@ function App() {
 
     setMessages(prev => ({
       ...prev,
-      [activeContactId]: [...(prev[activeContactId] || []), newMessage],
+      [activeContactId]: [...(prev[activeContactId] ?? []), newMsg],
     }));
+
+    await sendMessage(activeContactId, text);
   };
+
+  const activeContact = contacts.find(c => c.id === activeContactId) ?? null;
+  const activeMessages = activeContactId ? (messages[activeContactId] ?? []) : [];
 
   return (
     <div className="layout-container">
-      <Sidebar 
-        contacts={MOCK_CONTACTS} 
-        activeContactId={activeContactId} 
-        onSelectContact={setActiveContactId} 
+      <div className="ws-status disconnected">
+         ○ Serverless Mode (LAN Only)
+      </div>
+
+      <Sidebar
+        contacts={contacts}
+        activeContactId={activeContactId}
+        onSelectContact={setActiveContactId}
+        currentUser={myName}
+        onLogout={() => {}}
       />
-      <ChatArea 
-        contact={activeContact} 
-        messages={activeMessages} 
-        onSendMessage={handleSendMessage} 
+      <ChatArea
+        contact={activeContact}
+        messages={activeMessages}
+        onSendMessage={handleSendMessage}
       />
     </div>
+  );
+}
+
+function App() {
+  return (
+    <DesktopNetProvider>
+      <P2PApp />
+    </DesktopNetProvider>
   );
 }
 

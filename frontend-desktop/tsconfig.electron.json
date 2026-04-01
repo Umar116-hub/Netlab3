@@ -4,11 +4,14 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "outDir": "dist-electron",
-    "rootDir": "src",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "baseUrl": ".",
+    "paths": {
+      "@shared/*": ["../shared/*"]
+    }
   },
-  "include": ["src/main.ts", "src/shared/**/*"]
+  "include": ["src/main.ts", "src/shared/**/*.ts", "../shared/types/p2p.ts"]
 }

@@ -3,17 +3,44 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "main": "dist-electron/main.js",
+  "main": "dist-electron/frontend-desktop/src/main.js",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build && tsc -p tsconfig.electron.json",
     "lint": "eslint .",
     "preview": "vite preview",
-    "start": "electron ."
+    "start": "electron .",
+    "pack": "npm run build && npx electron-builder --win --x64"
+  },
+  "build": {
+    "appId": "com.netlab.lantalk",
+    "productName": "NetLab LAN Talk",
+    "directories": {
+      "buildResources": "assets",
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ]
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false
+    }
   },
   "dependencies": {
     "better-sqlite3": "^12.8.0",
     "lucide-react": "^0.577.0",
+    "node-machine-id": "^1.1.12",
     "react": "^19.2.4",
     "react-dom": "^19.2.4"
   },

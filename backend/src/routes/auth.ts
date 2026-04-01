@@ -31,6 +31,7 @@ export default async function authRoutes(fastify: FastifyInstance) {
       
       return reply.status(201).send({ message: 'User registered successfully', accountId });
     } catch (e: any) {
+      console.error('Registration error:', e);
       if (e.message.includes('UNIQUE constraint failed: accounts.username')) {
         return reply.status(409).send({ error: 'Username already taken' });
       }
@@ -39,46 +40,63 @@ export default async function authRoutes(fastify: FastifyInstance) {
   });
 
   fastify.post('/api/auth/login', async (request: FastifyRequest, reply: FastifyReply) => {
-    const { username, password, device_id } = request.body as any;
+    try {
+      const { username, password, device_id } = request.body as any;
 
-    if (!username || !password) {
-      return reply.status(400).send({ error: 'Missing username or password' });
+      if (!username || !password) {
+        return reply.status(400).send({ error: 'Missing username or password' });
+      }
+
+      const db = getDb();
+      const account = db.prepare('SELECT id, password_hash FROM accounts WHERE username = ? AND deleted_at IS NULL').get(username) as Account | undefined;
+
+      if (!account) {
+        return reply.status(401).send({ error: 'Invalid credentials' });
+      }
+
+      const isValid = await argon2.verify(account.password_hash, password);
+      if (!isValid) {
+        return reply.status(401).send({ error: 'Invalid credentials' });
+      }
+
+      // Verify device exists (in a real app, prompts for adding a new device if missing)
+      let internalDeviceId: string | null = null;
+      if (device_id) {
+          const device = db.prepare('SELECT id FROM devices WHERE account_id = ? AND device_id = ?').get(account.id, device_id) as Device | undefined;
+          if (device) internalDeviceId = device.id;
+      }
+
+      // Create session
+      const sessionId = crypto.randomUUID();
+      const token = crypto.randomBytes(32).toString('hex');
+      const token_hash = crypto.createHash('sha256').update(token).digest('hex');
+      
+      const expiresAt = new Date();
+      expiresAt.setDate(expiresAt.getDate() + 30); // 30 day expiration
+
+      db.prepare('INSERT INTO sessions (id, account_id, device_id, token_hash, expires_at) VALUES (?, ?, ?, ?, ?)')
+        .run(sessionId, account.id, internalDeviceId, token_hash, expiresAt.toISOString());
+
+      return reply.status(200).send({ 
+        message: 'Login successful', 
+        token,
+        account_id: account.id
+      });
+    } catch (err) {
+      console.error('[AUTH] Login Error:', err);
+      return reply.status(500).send({ error: 'Internal server error' });
     }
+  });
 
+  // Simple global discovery for web testing
+  fastify.get('/api/contacts/discovery', async (_request, reply) => {
     const db = getDb();
-    const account = db.prepare('SELECT id, password_hash FROM accounts WHERE username = ? AND deleted_at IS NULL').get(username) as Account | undefined;
-
-    if (!account) {
-      return reply.status(401).send({ error: 'Invalid credentials' });
-    }
-
-    const isValid = await argon2.verify(account.password_hash, password);
-    if (!isValid) {
-      return reply.status(401).send({ error: 'Invalid credentials' });
-    }
-
-    // Verify device exists (in a real app, prompts for adding a new device if missing)
-    let internalDeviceId: string | null = null;
-    if (device_id) {
-        const device = db.prepare('SELECT id FROM devices WHERE account_id = ? AND device_id = ?').get(account.id, device_id) as Device | undefined;
-        if (device) internalDeviceId = device.id;
-    }
-
-    // Create session
-    const sessionId = crypto.randomUUID();
-    const token = crypto.randomBytes(32).toString('hex');
-    const token_hash = crypto.createHash('sha256').update(token).digest('hex');
-    
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 30); // 30 day expiration
-
-    db.prepare('INSERT INTO sessions (id, account_id, device_id, token_hash, expires_at) VALUES (?, ?, ?, ?, ?)')
-      .run(sessionId, account.id, internalDeviceId, token_hash, expiresAt.toISOString());
-
-    return reply.status(200).send({ 
-      message: 'Login successful', 
-      token,
-      account_id: account.id
-    });
+    const users = db.prepare('SELECT id, username FROM accounts WHERE deleted_at IS NULL').all() as any[];
+    console.log(`[Discovery] Returning ${users.length} registered users`);
+    return reply.send(users.map(u => ({
+      id: u.id,
+      name: u.username,
+      status: 'online' // Simplification for test
+    })));
   });
 }

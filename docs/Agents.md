@@ -374,3 +374,4 @@ Server cannot see: - Message plaintext - File plaintext - Private keys
 ________________________________________
 v1 PRD Status: Functionally Complete
 Remaining items are implementation details, not architectural blockers.
+

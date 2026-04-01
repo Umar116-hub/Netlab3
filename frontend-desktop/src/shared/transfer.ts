@@ -1,118 +1,147 @@
 import net from 'net';
 import fs from 'fs';
 
-const CHUNK_SIZE = 1024 * 1024; // 1 MiB chunk definitions
-const DEFAULT_TCP_PORT = 54546;
+export interface TransferProgress {
+  transferId: string;
+  bytesTransferred: number;
+  totalBytes: number;
+  status: 'pending' | 'active' | 'completed' | 'error';
+  error?: string;
+}
 
-export class FileTransferService {
+export class FileSender {
   private server: net.Server | null = null;
-  private activeUploads = new Map<string, net.Socket>();
-  private activeDownloads = new Map<string, { bytesReceived: number, fileStream: fs.WriteStream }>();
 
-  /**
-   * Start listening for incoming file transfers from peers.
-   */
-  startListener(saveDirectory: string) {
-    this.server = net.createServer((socket) => {
-      let currentFileId: string | null = null;
+  start(filePath: string, onProgress: (p: TransferProgress) => void): Promise<{ port: number }> {
+    return new Promise((resolve, reject) => {
+      const stats = fs.statSync(filePath);
+      const totalBytes = stats.size;
+      const transferId = Math.random().toString(36).substring(7);
 
-      socket.on('data', (data) => {
-        // v1 simplistic implementation: 
-        // 1. Expected first payload is JSON descriptor "{ fileId, fileName, size }"
-        // 2. Subsequent packets are file bytes
-        
-        if (!currentFileId) {
-          try {
-            const headerStr = data.toString('utf-8');
-            const [metadataJson, ...rest] = headerStr.split('\n\n'); // header delimiter
-            const meta = JSON.parse(metadataJson);
-            currentFileId = meta.fileId;
+      this.server = net.createServer((socket) => {
+        console.log('Receiver connected to TCP server');
+        let bytesSent = 0;
+        const readStream = fs.createReadStream(filePath);
 
-            const savePath = `${saveDirectory}/${meta.fileName}`;
-            const fileStream = fs.createWriteStream(savePath);
-            this.activeDownloads.set(currentFileId!, { bytesReceived: 0, fileStream });
+        readStream.on('data', (chunk) => {
+          bytesSent += chunk.length;
+          onProgress({
+            transferId,
+            bytesTransferred: bytesSent,
+            totalBytes,
+            status: 'active'
+          });
+        });
 
-            // If there's leftover body data in the first chunk, write it
-            if (rest.length > 0) {
-              const bodyBuffer = Buffer.from(rest.join('\n\n'), 'utf-8'); // recover the rest
-              fileStream.write(bodyBuffer);
-              this.activeDownloads.get(currentFileId!)!.bytesReceived += bodyBuffer.length;
-            }
+        readStream.on('end', () => {
+          onProgress({
+            transferId,
+            bytesTransferred: totalBytes,
+            totalBytes,
+            status: 'completed'
+          });
+          socket.end();
+          this.stop();
+        });
 
-            // Send explicit ACK for delivery receipt rules
-            socket.write(JSON.stringify({ type: 'ack', fileId: currentFileId, status: 'started' }) + '\n\n');
+        readStream.on('error', (err) => {
+          onProgress({
+            transferId,
+            bytesTransferred: bytesSent,
+            totalBytes,
+            status: 'error',
+            error: err.message
+          });
+          this.stop();
+        });
 
-          } catch(e) {
-             socket.end(); // Bad sequence
-          }
+        readStream.pipe(socket);
+      });
+
+      this.server.listen(0, '0.0.0.0', () => {
+        const address = this.server?.address();
+        if (address && typeof address !== 'string') {
+          resolve({ port: address.port });
         } else {
-          // Streaming direct bytes
-          const download = this.activeDownloads.get(currentFileId);
-          if (download) {
-            download.fileStream.write(data);
-            download.bytesReceived += data.length;
-          }
+          reject(new Error('Failed to get server port'));
         }
       });
 
-      socket.on('end', () => {
-         if (currentFileId && this.activeDownloads.has(currentFileId)) {
-             const { fileStream } = this.activeDownloads.get(currentFileId)!;
-             fileStream.close();
-             console.log(`File download complete: ${currentFileId}`);
-             this.activeDownloads.delete(currentFileId);
-         }
-      });
-
-      socket.on('error', (err) => console.error('P2P RX Error:', err));
-    });
-
-    this.server.listen(DEFAULT_TCP_PORT, '0.0.0.0', () => {
-      console.log(`P2P File Transfer Server listening on port ${DEFAULT_TCP_PORT}`);
-    });
-  }
-
-  /**
-   * Push a file payload directly to a local peer via TCP.
-   */
-  async sendFile(peerAddress: string, filePath: string, fileId: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const socket = new net.Socket();
-      
-      socket.connect(DEFAULT_TCP_PORT, peerAddress, () => {
-         const stats = fs.statSync(filePath);
-         const fileName = filePath.split(/[\\/]/).pop();
-         
-         const header = JSON.stringify({ fileId, fileName, size: stats.size });
-         // Send header delimited by double newline
-         socket.write(header + '\n\n');
-      });
-
-      socket.on('data', (data) => {
-        try {
-           const str = data.toString('utf-8');
-           const [msg, ...rest] = str.split('\n\n');
-           const reply = JSON.parse(msg);
-           if (reply.type === 'ack' && reply.status === 'started') {
-              // Now we stream the file binary
-              const stream = fs.createReadStream(filePath, { highWaterMark: CHUNK_SIZE });
-              stream.pipe(socket);
-
-              stream.on('end', () => {
-                  socket.end(); // Closing triggers physical transmission finish
-                  resolve();
-              });
-           }
-        } catch(e) {}
-      });
-
-      socket.on('error', (err) => {
-         reject(err);
+      this.server.on('error', (err) => {
+        onProgress({
+          transferId,
+          bytesTransferred: 0,
+          totalBytes,
+          status: 'error',
+          error: err.message
+        });
+        reject(err);
       });
     });
   }
 
   stop() {
-    if (this.server) this.server.close();
+    if (this.server) {
+      this.server.close();
+      this.server = null;
+    }
+  }
+}
+
+export class FileReceiver {
+  private socket: net.Socket | null = null;
+
+  receive(
+    senderIp: string,
+    senderPort: number,
+    savePath: string,
+    totalBytes: number,
+    transferId: string,
+    onProgress: (p: TransferProgress) => void
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.socket = new net.Socket();
+      let bytesReceived = 0;
+      const writeStream = fs.createWriteStream(savePath);
+
+      this.socket.connect(senderPort, senderIp, () => {
+        console.log(`Connected to sender at ${senderIp}:${senderPort}`);
+      });
+
+      this.socket.on('data', (chunk) => {
+        bytesReceived += chunk.length;
+        onProgress({
+          transferId,
+          bytesTransferred: bytesReceived,
+          totalBytes,
+          status: 'active'
+        });
+      });
+
+      this.socket.on('end', () => {
+        onProgress({
+          transferId,
+          bytesTransferred: totalBytes,
+          totalBytes,
+          status: 'completed'
+        });
+        writeStream.end();
+        resolve();
+      });
+
+      this.socket.on('error', (err) => {
+        onProgress({
+          transferId,
+          bytesTransferred: bytesReceived,
+          totalBytes,
+          status: 'error',
+          error: err.message
+        });
+        writeStream.end();
+        reject(err);
+      });
+
+      this.socket.pipe(writeStream);
+    });
   }
 }
