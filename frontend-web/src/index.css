@@ -24,12 +24,13 @@
 }
 
 html, body, #root {
-  height: 100vh;
+  height: 100dvh;
   width: 100vw;
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   background-color: var(--bg-main);
   color: var(--text-primary);
   overflow: hidden;
+  overscroll-behavior: none;
 }
 
 /* Scrollbars */
@@ -60,10 +61,21 @@ html, body, #root {
   100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(99, 102, 241, 0); }
 }
 
+@keyframes blink {
+  0% { opacity: 1; }
+  50% { opacity: 0.4; }
+  100% { opacity: 1; }
+}
+
+.refresh-blink {
+  animation: blink 0.6s ease;
+}
+
 .layout-container {
   display: flex;
-  height: 100vh;
+  height: 100dvh;
   width: 100%;
+  overflow: hidden;
 }
 
 /* Sidebar */
@@ -126,6 +138,65 @@ html, body, #root {
 .contact-list {
   flex: 1;
   overflow-y: auto;
+}
+
+.filter-toggle {
+  display: flex;
+  margin: 0 20px 10px;
+  background: var(--bg-surface);
+  border-radius: 8px;
+  padding: 4px;
+  border: 1px solid var(--border-color);
+}
+
+.toggle-btn {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-weight: 500;
+  padding: 6px 0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.toggle-btn.active {
+  background: var(--bg-main);
+  color: var(--text-primary);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.unread-badge {
+  background-color: var(--error);
+  color: white;
+  font-size: 0.75rem;
+  font-weight: 700;
+  min-width: 20px;
+  height: 20px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+  box-shadow: 0 2px 4px rgba(239, 68, 68, 0.4);
+}
+
+.delete-btn {
+  opacity: 0;
+  color: var(--error);
+  padding: 6px;
+}
+
+.contact-item:hover .delete-btn {
+  opacity: 1;
+}
+
+.delete-btn:hover {
+  background: rgba(239, 68, 68, 0.1);
+  color: #f87171;
 }
 
 .contact-item {
@@ -200,9 +271,12 @@ html, body, #root {
   flex-direction: column;
   background-color: var(--bg-main);
   position: relative;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .chat-header {
+  flex-shrink: 0;
   height: 73px;
   padding: 0 24px;
   border-bottom: 1px solid var(--border-color);
@@ -253,6 +327,9 @@ html, body, #root {
 
 .messages-container {
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   padding: 24px;
   overflow-y: auto;
   display: flex;
@@ -311,12 +388,89 @@ html, body, #root {
 
 /* Chat Input */
 .chat-input-container {
-  padding: 20px 24px;
-  background-color: var(--bg-main);
-  border-top: 1px solid var(--border-color);
+  flex-shrink: 0;
+  padding: 16px;
+  padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
   display: flex;
-  gap: 16px;
-  align-items: flex-end;
+  flex-direction: column;
+  gap: 12px;
+  position: relative;
+}
+
+.staged-file-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--primary);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 4px;
+  animation: slideUp 0.3s ease;
+}
+
+@keyframes slideUp {
+  from { transform: translateY(10px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.staged-file-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.staged-file-name {
+  font-weight: 600;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.staged-file-size {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.staged-file-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.staged-cancel {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.staged-cancel:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+}
+
+.staged-send {
+  background: var(--primary);
+  border: none;
+  color: white;
+  cursor: pointer;
+  font-weight: 700;
+  padding: 8px 20px;
+  border-radius: 4px;
+  box-shadow: 0 4px 14px rgba(66, 133, 244, 0.3);
+  transition: all 0.2s;
+}
+
+.staged-send:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(66, 133, 244, 0.4);
 }
 
 .input-wrapper {
@@ -677,3 +831,198 @@ html, body, #root {
 .status-active { color: var(--accent-primary); }
 .status-completed { color: var(--success); }
 .status-error { color: var(--error); }
+
+/* ---- Integrated File Message ---- */
+.file-message-bubble {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 240px;
+  max-width: 320px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 14px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+}
+
+.sent .file-message-bubble {
+  border-bottom-right-radius: 4px;
+  background: linear-gradient(135deg, #4f46e5, #7c3aed);
+}
+
+.received .file-message-bubble {
+  border-bottom-left-radius: 4px;
+}
+
+.file-message-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.file-icon-wrapper {
+  width: 40px;
+  height: 40px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+}
+
+.file-message-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.file-message-name {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: white;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+}
+
+.file-message-size {
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.file-message-progress {
+  height: 24px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 10px 0;
+  position: relative;
+}
+
+.file-message-progress-fill {
+  height: 100%;
+  background: var(--primary);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.file-message-metrics {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 8px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: white;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+.file-message-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.file-message-btn {
+  padding: 6px 16px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s ease;
+}
+
+.file-message-btn.accept {
+  background: #fff;
+  color: var(--accent-primary);
+}
+
+.file-message-btn.accept:hover {
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.file-message-status {
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.8);
+  font-weight: 500;
+}
+
+/* ---- Connection Badge ---- */
+.ws-status {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 16px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  z-index: 100;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-secondary);
+  transition: all 0.3s ease;
+  pointer-events: none;
+}
+
+.ws-status.connected {
+  color: #4CAF50;
+  border-color: rgba(76, 175, 80, 0.3);
+}
+
+.ws-status.disconnected {
+  color: #F44336;
+  border-color: rgba(244, 67, 54, 0.3);
+}
+
+/* ---- Mobile Responsiveness ---- */
+.mobile-back-btn {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .mobile-back-btn {
+    display: flex;
+    margin-right: -4px;
+  }
+
+  .desktop-only {
+    display: none !important;
+  }
+
+  .layout-container[data-active="false"] .sidebar {
+    width: 100%;
+    display: flex;
+    border-right: none;
+  }
+
+  .layout-container[data-active="false"] .chat-area {
+    display: none;
+  }
+
+  .layout-container[data-active="true"] .sidebar {
+    display: none;
+  }
+
+  .layout-container[data-active="true"] .chat-area {
+    display: flex;
+    width: 100%;
+  }
+
+  .file-message-bubble {
+    min-width: 200px;
+    max-width: 260px;
+  }
+}

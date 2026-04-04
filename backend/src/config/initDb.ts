@@ -12,6 +12,7 @@ db.exec(`
     id TEXT PRIMARY KEY,
     username TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
+    is_admin INTEGER NOT NULL DEFAULT 0,
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     disabled_at DATETIME NULL,
     deleted_at DATETIME NULL

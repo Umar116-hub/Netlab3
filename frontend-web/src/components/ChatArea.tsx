@@ -1,36 +1,71 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Paperclip, MoreVertical, Shield } from 'lucide-react';
+import { Send, Paperclip, MoreVertical, Shield, File as FileIcon } from 'lucide-react';
 import type { Contact, Message } from '../App';
 import { useTransfer } from '../context/TransferContext';
+import { useWebSocket } from '../context/AuthContext';
 
 interface ChatAreaProps {
   contact: Contact | null;
   messages: Message[];
   onSendMessage: (text: string) => void;
+  onLocalFileSent?: (contactId: string, file_info: any) => void;
+  onBack?: () => void;
 }
 
-const ChatArea = ({ contact, messages, onSendMessage }: ChatAreaProps) => {
+const ChatArea = ({ contact, messages, onSendMessage, onLocalFileSent, onBack }: ChatAreaProps) => {
   const [inputText, setInputText] = useState('');
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [stagedFile, setStagedFile] = useState<File | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { transfers, sendFile, acceptFile } = useTransfer();
+  const { onlineUserIds } = useWebSocket();
+  
+  const isOnline = contact ? onlineUserIds.has(contact.id) : false;
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
   }, [messages]);
 
-  const handleSend = (e: React.FormEvent) => {
+  const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (stagedFile) {
+      await handleStagedSend();
+    }
     if (inputText.trim()) {
       onSendMessage(inputText);
       setInputText('');
     }
   };
 
+  const handleStagedSend = async () => {
+    if (stagedFile && contact) {
+      try {
+        const tid = await sendFile(contact.id, stagedFile);
+        if (onLocalFileSent) {
+          onLocalFileSent(contact.id, {
+            transfer_id: tid,
+            name: stagedFile.name,
+            size: stagedFile.size,
+            type: stagedFile.type
+          });
+        }
+        setStagedFile(null);
+      } catch (err) {
+        console.error('Failed to send file:', err);
+      }
+    }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      handleSend(e);
+      if (stagedFile) {
+        handleStagedSend();
+      } else if (inputText.trim()) {
+        handleSend(e);
+      }
     }
   };
 
@@ -44,8 +79,8 @@ const ChatArea = ({ contact, messages, onSendMessage }: ChatAreaProps) => {
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file && contact) {
-      sendFile(contact.id, file);
+    if (file) {
+      setStagedFile(file);
       e.target.value = '';
     }
   };
@@ -69,95 +104,121 @@ const ChatArea = ({ contact, messages, onSendMessage }: ChatAreaProps) => {
         onChange={handleFileChange} 
       />
 
-      {/* Transfer Overlay */}
-      <div className="transfer-overlay">
-        {transfers.filter(t => t.status !== 'completed' || t.progress < 100).map(transfer => (
-          <div key={transfer.id} className="transfer-item">
-            <div className="transfer-info">
-              <span className="transfer-name">{transfer.name}</span>
-              <span className="transfer-size">{formatFileSize(transfer.size)}</span>
-            </div>
-            
-            <div className="progress-container">
-              <div 
-                className="progress-bar" 
-                style={{ width: `${transfer.progress}%` }}
-              ></div>
-            </div>
-
-            <div className="transfer-actions">
-              {transfer.status === 'pending' && transfer.direction === 'receiving' ? (
-                <>
-                  <button className="transfer-btn reject">Reject</button>
-                  <button 
-                    className="transfer-btn accept"
-                    onClick={() => acceptFile(transfer.peerId)}
-                  >
-                    Accept
-                  </button>
-                </>
-              ) : (
-                <span className={`transfer-status status-${transfer.status}`}>
-                  {transfer.status === 'active' ? `${Math.round(transfer.progress)}%` : transfer.status}
-                </span>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
-
       <div className="chat-header">
         <div className="chat-header-info">
+          {onBack && (
+            <button className="icon-btn mobile-back-btn" onClick={onBack} title="Back to Contacts">
+              <MoreVertical size={24} />
+            </button>
+          )}
           <div className="avatar">
             {contact.name.charAt(0).toUpperCase()}
-            {contact.status === 'online' && <div className="status-indicator"></div>}
+            {isOnline && <div className="status-indicator"></div>}
           </div>
           <div className="chat-header-text">
             <h2>{contact.name}</h2>
-            <p>{contact.status === 'online' ? 'Online' : 'Offline'}</p>
+            <p>{isOnline ? 'Online' : 'Offline'}</p>
           </div>
-        </div>
-        <div className="header-actions">
-          <button 
-            className="icon-btn" 
-            title="Send File"
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <Paperclip size={20} />
-          </button>
-          <button className="icon-btn" title="More Options"><MoreVertical size={20} /></button>
         </div>
       </div>
 
-      <div className="messages-container">
+      <div className="messages-container" ref={scrollRef}>
         {messages.map((msg) => {
+          if (!msg.file_info && !msg.text?.trim()) return null;
+
           const isMe = msg.senderId === 'me';
+          const transfer = msg.file_info ? transfers.find(t => t.id === msg.file_info?.transfer_id) : null;
+          
           return (
             <div key={msg.id} className={`message-wrapper ${isMe ? 'sent' : 'received'}`}>
-              <div>
-                <div className="message-bubble">
-                  {msg.text}
-                </div>
+              <div style={{ maxWidth: '100%' }}>
+                {msg.file_info ? (
+                  /* File Message Bubble */
+                  <div className="file-message-bubble">
+                    <div className="file-message-header">
+                      <div className="file-icon-wrapper">
+                        <FileIcon size={20} />
+                      </div>
+                      <div className="file-message-info">
+                        <span className="file-message-name">{msg.file_info.name}</span>
+                        <span className="file-message-size">{formatFileSize(msg.file_info.size)}</span>
+                      </div>
+                    </div>
+                    
+                    {transfer && transfer.status === 'active' && (
+                      <div className="file-message-progress">
+                        <div 
+                          className="file-message-progress-fill" 
+                          style={{ width: `${transfer.progress}%` }}
+                        ></div>
+                        <div className="file-message-metrics">
+                           {transfer.speed && (
+                             <span>{(transfer.speed / (1024 * 1024)).toFixed(1)} MB/s</span>
+                           )}
+                           {transfer.timeRemaining !== undefined && transfer.timeRemaining > 0 && (
+                             <span>Remains: {Math.ceil(transfer.timeRemaining)}s</span>
+                           )}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="file-message-actions">
+                      {!isMe && (!transfer?.status && !msg.file_info?.status || transfer?.status === 'pending') ? (
+                        <button 
+                          className="file-message-btn accept"
+                          onClick={() => acceptFile(msg.senderId, msg.file_info?.transfer_id)}
+                        >
+                          Accept & Download
+                        </button>
+                      ) : (
+                        <span className="file-message-status">
+                          {(transfer?.status || msg.file_info?.status) === 'error' ? '✕ Unreceived' :
+                           (transfer?.status || msg.file_info?.status) === 'completed' ? '✓ Received' : 
+                           (transfer?.status === 'active' || transfer?.status === 'connecting') ? `Transferring... ${Math.round(transfer.progress)}%` : 
+                           'Sent Offer'}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  /* Standard Text Message Bubble */
+                  <div className="message-bubble">
+                    {msg.text}
+                  </div>
+                )}
                 <span className="message-time">{msg.timestamp}</span>
               </div>
             </div>
           );
         })}
-        <div ref={messagesEndRef} />
       </div>
 
       <div className="chat-input-container">
-        <button 
-          className="icon-btn" 
-          style={{ padding: '12px' }} 
-          title="Attach File"
-          onClick={() => fileInputRef.current?.click()}
-        >
-          <Paperclip size={24} />
-        </button>
+        {stagedFile && (
+          <div className="staged-file-bar">
+            <div className="staged-file-info">
+              <FileIcon size={16} />
+              <span className="staged-file-name">{stagedFile.name}</span>
+              <span className="staged-file-size">({formatFileSize(stagedFile.size)})</span>
+            </div>
+            <div className="staged-file-actions">
+               <button type="button" className="staged-cancel" onClick={() => setStagedFile(null)}>Cancel</button>
+               <button type="button" className="staged-send desktop-only" onClick={handleStagedSend}>Send File</button>
+            </div>
+          </div>
+        )}
         
         <form className="input-wrapper" onSubmit={handleSend} style={{ flex: 1, margin: 0, padding: 0, background: 'transparent', border: 'none', display: 'flex', gap: '12px', alignItems: 'center' }}>
-          <div className="input-wrapper" style={{ flex: 1 }}>
+          <div className="input-wrapper" style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <button 
+              type="button"
+              className="icon-btn attach-btn" 
+              title="Attach File"
+              onClick={() => fileInputRef.current?.click()}
+              style={{ color: 'var(--text-secondary)', padding: '4px' }}
+            >
+              <Paperclip size={20} />
+            </button>
             <textarea 
               className="chat-input" 
               placeholder="Type a secure message..." 
@@ -167,8 +228,13 @@ const ChatArea = ({ contact, messages, onSendMessage }: ChatAreaProps) => {
               rows={1}
             />
           </div>
-          <button type="submit" className="send-btn" disabled={!inputText.trim()}>
-            <Send size={20} style={{ marginLeft: '4px' }} />
+          <button 
+            type="submit" 
+            className="send-btn" 
+            disabled={!inputText.trim() && !stagedFile}
+            onMouseDown={(e) => e.preventDefault()}
+          >
+            <Send size={20} style={{ transform: 'translate(-1px, 1px)' }} />
           </button>
         </form>
       </div>

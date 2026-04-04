@@ -1,7 +1,8 @@
 // Central API client for communicating with the backend
 
-export const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:3003';
-export const WS_BASE = API_BASE.replace(/^http/, 'ws');
+const DEFAULT_HOST = typeof window !== 'undefined' ? window.location.hostname : 'localhost';
+export const API_BASE = import.meta.env.VITE_API_URL ?? `http://${DEFAULT_HOST}:3004`;
+export const WS_BASE = API_BASE.replace(/^https/, 'wss').replace(/^http/, 'ws');
 
 export interface RegisterPayload {
   username: string;
@@ -20,12 +21,13 @@ export interface LoginPayload {
 export interface LoginResult {
   token: string;
   account_id: string;
+  is_admin: boolean;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = localStorage.getItem('nls_token');
   const headers: HeadersInit = {
-    'Content-Type': 'application/json',
+    ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...(init?.headers ?? {}),
   };
@@ -40,7 +42,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   register: (payload: RegisterPayload) =>
-    request<{ message: string; accountId: string }>('/api/auth/register', {
+    request<{ message: string; accountId: string; is_admin: boolean }>('/api/auth/register', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
@@ -51,6 +53,25 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
+  deleteAccount: (accountId: string) => 
+    request<{ message: string }>(`/api/auth/account/${accountId}`, {
+      method: 'DELETE'
+    }),
+
   ping: () => request<{ status: string; time: string }>('/ping'),
   getDiscoveryContacts: () => request<any[]>('/api/contacts/discovery'),
+  getMessages: (conversationId: string) => request<{ messages: any[] }>(`/api/messages/${conversationId}`),
+  getOnlineUsers: () => request<any[]>('/api/debug/clients'),
+
+  saveFileOffer: (to: string, file_info: object) =>
+    request<{ message_id: string; conversation_id: string }>('/api/messages/file-offer', {
+      method: 'POST',
+      body: JSON.stringify({ to, file_info }),
+    }),
+
+  updateFileStatus: (transfer_id: string, status: string, to: string) =>
+    request<{ ok: boolean }>('/api/messages/update-file-status', {
+      method: 'POST',
+      body: JSON.stringify({ transfer_id, status, to }),
+    }),
 };

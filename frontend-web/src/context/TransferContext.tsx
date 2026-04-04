@@ -1,5 +1,7 @@
-import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useRef, type ReactNode } from 'react';
 import { useWebSocket } from './AuthContext';
+import { uuidv4 } from '../lib/crypto';
+import { api } from '../lib/api';
 import type { WebRTCSignalingMessage, FileTransferSignaling } from '@shared/types/p2p.js';
 
 export interface ActiveTransfer {
@@ -7,15 +9,17 @@ export interface ActiveTransfer {
   name: string;
   size: number;
   progress: number;
-  status: 'pending' | 'active' | 'completed' | 'error';
+  status: 'pending' | 'connecting' | 'active' | 'completed' | 'error';
   direction: 'sending' | 'receiving';
   peerId: string;
+  speed?: number;
+  timeRemaining?: number;
 }
 
 interface TransferContextValue {
   transfers: ActiveTransfer[];
-  sendFile: (contactId: string, file: File) => Promise<void>;
-  acceptFile: (peerId: string) => Promise<void>;
+  sendFile: (contactId: string, file: File) => Promise<string>;
+  acceptFile: (peerId: string, transfer_id?: string) => Promise<void>;
 }
 
 const TransferContext = createContext<TransferContextValue | null>(null);
@@ -30,308 +34,326 @@ const ICE_SERVERS = {
 export function TransferProvider({ children }: { children: ReactNode }) {
   const { send, addListener, removeListener } = useWebSocket();
   const [transfers, setTransfers] = useState<ActiveTransfer[]>([]);
-  const [peerConnections] = useState<Map<string, RTCPeerConnection>>(new Map());
-  const [dataChannels] = useState<Map<string, RTCDataChannel>>(new Map());
-  const [pendingSignals] = useState<Map<string, { peerId: string, signal: any }>>(new Map());
 
-  // Handle WebRTC Signaling via listener
-  useEffect(() => {
-    const handleMessage = (msg: any) => {
-      if (msg.type === 'webrtc_signaling' && msg.payload) {
-        const { sender_id, payload } = msg;
-        console.log(`[P2P] Incoming signal from ${sender_id}:`, payload.type);
-        handleSignalingMessage(sender_id, payload);
-      } else if (msg.type === 'file_offer') {
-         const offer = msg as unknown as FileTransferSignaling;
-         console.log(`[P2P] Received file offer for "${offer.file_info.name}" from ${offer.sender_id}`);
-         setTransfers(prev => {
-           if (prev.some(t => t.id === offer.file_info.transfer_id)) return prev;
-           return [...prev, {
-             id: offer.file_info.transfer_id,
-             name: offer.file_info.name,
-             size: offer.file_info.size,
-             progress: 0,
-             status: 'pending',
-             direction: 'receiving',
-             peerId: offer.sender_id
-           }];
-         });
-      } else if (msg.type === 'signaling_status') {
-        const color = msg.status === 'delivered' ? '#4CAF50' : '#F44336';
-        console.log(`%c[WS] Signal ${msg.msg_type} to ${msg.to}: ${msg.status}${msg.reason ? ' (' + msg.reason + ')' : ''}`, `color: ${color}; font-weight: bold;`);
-      }
-    };
+  // Use refs for mutable maps — they survive re-renders without causing effect re-runs
+  const peerConnections = useRef<Map<string, RTCPeerConnection>>(new Map()).current;
+  const pendingSignals = useRef<Map<string, { peerId: string; signal: any }>>(new Map()).current;
+  const candidateQueue = useRef<Map<string, RTCIceCandidateInit[]>>(new Map()).current;
+  const transferMeta = useRef<Map<string, { startTime: number; lastBytes: number; lastTime: number }>>(new Map()).current;
 
-    addListener(handleMessage);
-    return () => removeListener(handleMessage);
-  }, [addListener, removeListener]);
+  // Keep `send` in a ref so callbacks always use the latest version
+  const sendRef = useRef(send);
+  sendRef.current = send;
 
-  const [candidateQueue] = useState<Map<string, RTCIceCandidateInit[]>>(new Map());
-
-  const handleSignalingMessage = async (peerId: string, signal: WebRTCSignalingMessage) => {
-    console.log(`[P2P] Handling ${signal.type} from ${peerId}`);
-    let pc = peerConnections.get(peerId);
-    
-    if (!pc) {
-      pc = createPeerConnection(peerId);
+  const updateTransferMetrics = (id: string, currentBytes: number, totalSize: number) => {
+    const meta = transferMeta.get(id);
+    const now = Date.now();
+    if (!meta) {
+      transferMeta.set(id, { startTime: now, lastBytes: currentBytes, lastTime: now });
+      return;
     }
-
-    try {
-      if (signal.type === 'offer') {
-        await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
-        
-        // Store signal to be answered when user clicks "Accept"
-        console.log(`[P2P] Offer for peer ${peerId} staged. Waiting for user to Accept...`);
-        pendingSignals.set(peerId, { peerId, signal });
-
-        // Process any queued candidates now that remote description is set
-        const queued = candidateQueue.get(peerId);
-        if (queued) {
-          console.log(`[P2P] Processing ${queued.length} queued candidates for ${peerId}`);
-          for (const cand of queued) {
-            await pc.addIceCandidate(new RTCIceCandidate(cand));
-          }
-          candidateQueue.delete(peerId);
-        }
-      } else if (signal.type === 'answer') {
-        console.log(`[P2P] Received ANSWER from ${peerId}. Completing sender-side handshake.`);
-        await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
-        
-        // Process any queued candidates now that remote description is set
-        const queued = candidateQueue.get(peerId);
-        if (queued) {
-          console.log(`[P2P] Processing ${queued.length} queued candidates for ${peerId}`);
-          for (const cand of queued) {
-            await pc.addIceCandidate(new RTCIceCandidate(cand));
-          }
-          candidateQueue.delete(peerId);
-        }
-      } else if (signal.type === 'candidate') {
-        if (pc.remoteDescription) {
-          await pc.addIceCandidate(new RTCIceCandidate(signal.payload));
-        } else {
-          console.log(`[P2P] Queuing candidate for ${peerId} (remote description not ready)`);
-          const queue = candidateQueue.get(peerId) || [];
-          queue.push(signal.payload);
-          candidateQueue.set(peerId, queue);
-        }
-      }
-    } catch (err) {
-      console.error(`[P2P] Signaling error (${signal.type}) for ${peerId}:`, err);
+    const timeDiff = (now - meta.lastTime) / 1000;
+    if (timeDiff >= 0.5) {
+      const speed = (currentBytes - meta.lastBytes) / timeDiff;
+      const timeRemaining = speed > 0 ? (totalSize - currentBytes) / speed : 0;
+      setTransfers(prev => prev.map(t => (t.id === id ? { ...t, speed, timeRemaining } : t)));
+      transferMeta.set(id, { ...meta, lastBytes: currentBytes, lastTime: now });
     }
   };
 
+  // ── Signaling handler (stable ref — never recreated by useEffect) ──
+  const handleSignalingMessage = async (peerId: string, signal: WebRTCSignalingMessage) => {
+    let pc = peerConnections.get(peerId);
+
+    if (signal.type === 'offer' && pc && (pc.connectionState === 'failed' || pc.connectionState === 'closed')) {
+      pc.close();
+      peerConnections.delete(peerId);
+      pc = undefined;
+    }
+    if (!pc) pc = createPeerConnection(peerId);
+
+    try {
+      if (signal.type === 'offer') {
+        console.log(`[P2P] Handling OFFER from ${peerId}`);
+        await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
+        pendingSignals.set(peerId, { peerId, signal });
+        await flushCandidateQueue(pc, peerId);
+      } else if (signal.type === 'answer') {
+        console.log(`[P2P] Handling ANSWER from ${peerId}`);
+        await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
+        await flushCandidateQueue(pc, peerId);
+      } else if (signal.type === 'candidate') {
+        if (pc.remoteDescription && pc.remoteDescription.type) {
+          await pc.addIceCandidate(new RTCIceCandidate(signal.payload));
+        } else {
+          const q = candidateQueue.get(peerId) || [];
+          q.push(signal.payload);
+          candidateQueue.set(peerId, q);
+        }
+      }
+    } catch (err) {
+      console.error(`[P2P] Signaling error (${signal.type}):`, err);
+    }
+  };
+
+  const flushCandidateQueue = async (pc: RTCPeerConnection, peerId: string) => {
+    const queued = candidateQueue.get(peerId);
+    if (queued) {
+      console.log(`[P2P] Processing ${queued.length} queued candidates`);
+      for (const c of queued) {
+        try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch { /* skip bad candidates */ }
+      }
+      candidateQueue.delete(peerId);
+    }
+  };
+
+  // Keep a ref to the handler so the useEffect closure never goes stale
+  const signalingRef = useRef(handleSignalingMessage);
+  signalingRef.current = handleSignalingMessage;
+
+  // ── WebSocket listener — runs ONCE, never re-created on state changes ──
+  useEffect(() => {
+    const onMsg = (msg: any) => {
+      if (msg.type === 'webrtc_signaling' && msg.payload) {
+        signalingRef.current(msg.sender_id, msg.payload);
+      } else if (msg.type === 'file_offer') {
+        const o = msg as unknown as FileTransferSignaling;
+        console.log(`[P2P] File offer: "${o.file_info.name}" from ${o.sender_id}`);
+        setTransfers(prev => {
+          if (prev.some(t => t.id === o.file_info.transfer_id)) return prev;
+          return [...prev, {
+            id: o.file_info.transfer_id, name: o.file_info.name,
+            size: o.file_info.size, progress: 0, status: 'pending' as const,
+            direction: 'receiving' as const, peerId: o.sender_id,
+          }];
+        });
+      }
+    };
+    addListener(onMsg);
+    return () => removeListener(onMsg);
+  }, [addListener, removeListener]);
+
+  // ── PeerConnection factory ──
   const createPeerConnection = (peerId: string) => {
-    const pc = new RTCPeerConnection(ICE_SERVERS);
+    const pc = new RTCPeerConnection({ ...ICE_SERVERS, iceCandidatePoolSize: 10 });
     peerConnections.set(peerId, pc);
 
-    pc.onsignalingstatechange = () => {
-      console.log(`[P2P] Signaling State (${peerId}):`, pc.signalingState);
-    };
+    pc.onicecandidate = (e) => {
+      if (!e.candidate) return;
+      const parts = e.candidate.candidate.split(' ');
+      const ip = parts[4];
+      sendRef.current({ type: 'webrtc_signaling', recipient_id: peerId, payload: { type: 'candidate', payload: e.candidate } });
 
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        // Detailed log of the candidate found
-        const type = event.candidate.candidate.split(' ')[7];
-        console.log(`[P2P] Local ICE Candidate (${type}):`, event.candidate.candidate);
-        
-        send({
-          type: 'webrtc_signaling',
-          recipient_id: peerId,
-          payload: { type: 'candidate', payload: event.candidate }
+      // mDNS bypass
+      const host = window.location.hostname;
+      if (ip.endsWith('.local') && /^(\d{1,3}\.){3}\d{1,3}$/.test(host)) {
+        sendRef.current({
+          type: 'webrtc_signaling', recipient_id: peerId,
+          payload: { type: 'candidate', payload: { candidate: e.candidate.candidate.replace(ip, host), sdpMid: e.candidate.sdpMid, sdpMLineIndex: e.candidate.sdpMLineIndex } },
         });
       }
     };
 
     pc.oniceconnectionstatechange = () => {
-      console.log(`[P2P] ICE Connection State (${peerId}):`, pc.iceConnectionState);
-      if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
-        console.error(`[P2P] Connection to ${peerId} failed/dropped`);
+      console.log(`%c[P2P] ICE: ${pc.iceConnectionState}`, 'color:#ff9800;font-weight:bold');
+      if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'closed') {
+         setTransfers(p => p.map(t => {
+           if (t.peerId === peerId && ['connecting', 'active'].includes(t.status)) {
+             api.updateFileStatus(t.id, 'error', peerId).catch(console.error);
+             return { ...t, status: 'error' };
+           }
+           return t;
+         }));
       }
     };
-
-    pc.ondatachannel = (event) => {
-      console.log(`[P2P] DataChannel received from ${peerId}`);
-      setupDataChannel(peerId, event.channel);
+    pc.onconnectionstatechange = () => {
+      console.log(`%c[P2P] Conn: ${pc.connectionState}`, 'color:#00bcd4;font-weight:bold');
+      if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+         setTransfers(p => p.map(t => {
+           if (t.peerId === peerId && ['connecting', 'active'].includes(t.status)) {
+             api.updateFileStatus(t.id, 'error', peerId).catch(console.error);
+             return { ...t, status: 'error' };
+           }
+           return t;
+         }));
+      }
     };
+    pc.ondatachannel = (e) => { console.log('[P2P] Incoming DataChannel'); setupReceiver(peerId, e.channel); };
 
     return pc;
   };
 
-  const setupDataChannel = (peerId: string, channel: RTCDataChannel) => {
-    dataChannels.set(peerId, channel);
-    channel.binaryType = 'arraybuffer'; // Enforce ArrayBuffer instead of Blob
-    
-    let receivedChunks: ArrayBuffer[] = [];
-    let receivedSize = 0;
-    let currentTransferId: string | null = null;
-    let expectedSize = 0;
-    let transferName = '';
-    let lastReportedProgress = 0;
+  // ── Receiver-side DataChannel ──
+  const setupReceiver = (peerId: string, ch: RTCDataChannel) => {
+    ch.binaryType = 'arraybuffer';
+    let chunks: ArrayBuffer[] = [];
+    let got = 0;
+    let tid: string | null = null;
+    let total = 0;
+    let fname = '';
+    let lastPct = 0;
 
-    channel.onmessage = (event) => {
-      if (typeof event.data === 'string') {
-        const meta = JSON.parse(event.data);
-        if (meta.type === 'file_meta') {
-           currentTransferId = meta.transfer_id;
-           expectedSize = meta.size;
-           transferName = meta.name;
-           setTransfers(prev => prev.map(t => t.id === meta.transfer_id ? { ...t, status: 'active' } : t));
+    ch.onmessage = (ev) => {
+      if (typeof ev.data === 'string') {
+        const m = JSON.parse(ev.data);
+        if (m.type === 'file_meta') {
+          console.log(`[P2P] Receiving "${m.name}" (${m.size} bytes)`);
+          tid = m.transfer_id; total = m.size; fname = m.name;
+          setTransfers(p => {
+            const existing = p.find(t => t.id === m.transfer_id);
+            if (existing) return p.map(t => (t.id === m.transfer_id ? { ...t, status: 'active' as const } : t));
+            return [...p, { id: m.transfer_id, name: m.name, size: m.size, progress: 0, status: 'active', direction: 'receiving', peerId }];
+          });
         }
-      } else {
-        const chunk = event.data as ArrayBuffer;
-        receivedChunks.push(chunk);
-        receivedSize += chunk.byteLength || (chunk as any).size || 0;
-        
-        if (currentTransferId && expectedSize > 0) {
-           const currentProgress = Math.floor((receivedSize / expectedSize) * 100);
-           
-           if (receivedSize >= expectedSize) {
-             // Completion
-             const blob = new Blob(receivedChunks);
-             const url = URL.createObjectURL(blob);
-             const a = document.createElement('a');
-             a.href = url;
-             a.download = transferName;
-             a.click();
-             
-             setTransfers(prev => prev.map(tx => tx.id === currentTransferId ? { ...tx, progress: 100, status: 'completed' } : tx));
-             // Reset
-             receivedChunks = [];
-             receivedSize = 0;
-             lastReportedProgress = 0;
-           } else if (currentProgress > lastReportedProgress) {
-             lastReportedProgress = currentProgress;
-             setTransfers(prev => prev.map(tx => tx.id === currentTransferId ? { ...tx, progress: currentProgress } : tx));
-           }
-        }
+        return;
+      }
+      const buf = ev.data as ArrayBuffer;
+      chunks.push(buf);
+      got += buf.byteLength;
+
+      if (!tid || total <= 0) return;
+      const pct = Math.floor((got / total) * 100);
+
+      if (got >= total) {
+        console.log(`%c[P2P] ✅ Received ${got} bytes`, 'color:#4CAF50;font-weight:bold');
+        const blob = new Blob(chunks);
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = fname;
+        a.click();
+        setTransfers(p => p.map(t => (t.id === tid ? { ...t, progress: 100, status: 'completed' as const, speed: 0, timeRemaining: 0 } : t)));
+        api.updateFileStatus(tid, 'completed', peerId).catch(console.error);
+        chunks = []; got = 0; lastPct = 0;
+      } else if (pct > lastPct) {
+        lastPct = pct;
+        setTransfers(p => p.map(t => (t.id === tid ? { ...t, progress: pct } : t)));
+        updateTransferMetrics(tid, got, total);
+      }
+    };
+    ch.onerror = (e) => {
+      console.error('[P2P] Receiver channel error:', e);
+      if (tid) {
+         setTransfers(p => p.map(t => (t.id === tid ? { ...t, status: 'error' } : t)));
+         api.updateFileStatus(tid, 'error', peerId).catch(console.error);
       }
     };
   };
 
-  const sendFile = async (contactId: string, file: File) => {
-    console.log(`[P2P] Initializing transfer of "${file.name}" to ${contactId}`);
-    const transferId = Math.random().toString(36).substring(7);
-    setTransfers(prev => [...prev, {
-      id: transferId,
-      name: file.name,
-      size: file.size,
-      progress: 0,
-      status: 'pending',
-      direction: 'sending',
-      peerId: contactId
-    }]);
+  // ── Send a file ──
+  const sendFile = async (contactId: string, file: File): Promise<string> => {
+    console.log(`[P2P] Send "${file.name}" (${file.size} bytes) to ${contactId}`);
+    const tid = uuidv4();
 
-    // 1. Create PC
+    setTransfers(p => [...p, { id: tid, name: file.name, size: file.size, progress: 0, status: 'pending', direction: 'sending', peerId: contactId }]);
+
     const pc = createPeerConnection(contactId);
-    
-    // 2. Create Data Channel
-    const channel = pc.createDataChannel('fileTransfer');
-    dataChannels.set(contactId, channel);
+    const ch = pc.createDataChannel('fileTransfer');
+    ch.binaryType = 'arraybuffer';
 
-    channel.onopen = async () => {
-      // Send Metadata
-      channel.send(JSON.stringify({
-        type: 'file_meta',
-        name: file.name,
-        size: file.size,
-        transfer_id: transferId
-      }));
-
-      // Send File Chunks
-      const chunkSize = 65536; // 64KB - much faster payload mapping
-      let offset = 0;
-      let lastReportedProgress = 0;
-
-      const readSlice = async () => {
-        if (offset >= file.size) return;
-        
-        // Use modern arrayBuffer() for much faster slicing than FileReader
-        const slice = file.slice(offset, offset + chunkSize);
-        const buffer = await slice.arrayBuffer();
-        
-        channel.send(buffer);
-        offset += buffer.byteLength;
-        
-        const currentProgress = Math.floor((offset / file.size) * 100);
-        // Throttle React state updates to every 1% to prevent CPU UI threading death
-        if (currentProgress > lastReportedProgress || offset >= file.size) {
-           lastReportedProgress = currentProgress;
-           setTransfers(prev => prev.map(t => t.id === transferId ? { 
-             ...t, 
-             progress: offset >= file.size ? 100 : currentProgress, 
-             status: offset >= file.size ? 'completed' : 'active' 
-           } : t));
-        }
-
-        if (offset < file.size) {
-           // Handle backpressure so we don't crash the browser's SCTP buffer
-           if (channel.bufferedAmount > channel.bufferedAmountLowThreshold) {
-              channel.onbufferedamountlow = () => {
-                 channel.onbufferedamountlow = null;
-                 readSlice();
-              };
-           } else {
-              // Yield to event loop to allow UI thread to breathe
-              setTimeout(() => readSlice(), 0);
-           }
-        }
-      };
-
-      readSlice();
+    ch.onerror = (e) => {
+      console.error('[P2P] Sender channel error:', e);
+      setTransfers(p => p.map(t => (t.id === tid ? { ...t, status: 'error' } : t)));
+      api.updateFileStatus(tid, 'error', contactId).catch(console.error);
     };
 
-    // 3. Create Offer
+    ch.onopen = () => {
+      console.log(`%c[P2P] ✅ DataChannel OPEN — sending "${file.name}"`, 'color:#4CAF50;font-weight:bold');
+      try {
+        ch.send(JSON.stringify({ type: 'file_meta', name: file.name, size: file.size, transfer_id: tid }));
+
+        const CHUNK = 65536; // 64KB is generally best for local network P2P
+        let offset = 0;
+        let lastReport = Date.now();
+
+        setTransfers(p => p.map(t => (t.id === tid ? { ...t, status: 'active' } : t)));
+
+        const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+        const pump = async () => {
+          try {
+            while (offset < file.size && ch.readyState === 'open') {
+              // Browser bug workaround: Do not trust `onbufferedamountlow`
+              // If the buffer is full, simply pause the loop for 10ms and check again
+              if (ch.bufferedAmount > 256 * 1024) {
+                await sleep(10);
+                continue;
+              }
+
+              const end = Math.min(offset + CHUNK, file.size);
+              const buf = await file.slice(offset, end).arrayBuffer();
+              
+              if (ch.readyState !== 'open') break;
+
+              ch.send(buf);
+              offset += buf.byteLength;
+
+              // Update the UI at most every 100ms
+              const now = Date.now();
+              if (now - lastReport > 100 || offset >= file.size) {
+                const pct = Math.floor((offset / file.size) * 100);
+                updateTransferMetrics(tid, offset, file.size);
+                lastReport = now;
+                setTransfers(p => p.map(t => (t.id === tid ? { ...t, progress: offset >= file.size ? 100 : pct, status: offset >= file.size ? 'completed' : 'active' } : t)));
+              }
+            }
+
+            if (offset >= file.size) {
+              console.log(`%c[P2P] ✅ Sent all ${file.size} bytes`, 'color:#4CAF50;font-weight:bold');
+              setTransfers(p => p.map(t => (t.id === tid ? { ...t, progress: 100, status: 'completed' } : t)));
+              transferMeta.delete(tid);
+            }
+          } catch (err) {
+            console.error('[P2P] Transfer pump error:', err);
+            setTransfers(p => p.map(t => (t.id === tid ? { ...t, status: 'error' } : t)));
+          }
+        };
+
+        pump();
+      } catch (err) {
+        console.error('[P2P] onopen error:', err);
+        setTransfers(p => p.map(t => (t.id === tid ? { ...t, status: 'error' } : t)));
+      }
+    };
+
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-    
-    // 4. Send Offer via Signaling
-    console.log(`[P2P] Sending offer to ${contactId}`);
-    send({
-      type: 'webrtc_signaling',
-      recipient_id: contactId,
-      payload: { type: 'offer', payload: offer }
-    });
 
-    // Also send file_offer for UI notification
-    console.log(`[P2P] Sending file_offer to ${contactId}`);
-    send({
-      type: 'file_offer',
-      recipient_id: contactId,
-      file_info: {
-        name: file.name,
-        size: file.size,
-        type: file.type,
-        transfer_id: transferId
-      }
-    });
+    sendRef.current({ type: 'webrtc_signaling', recipient_id: contactId, payload: { type: 'offer', payload: offer } });
+    sendRef.current({ type: 'file_offer', recipient_id: contactId, file_info: { name: file.name, size: file.size, type: file.type, transfer_id: tid } });
+
+    return tid;
   };
 
-  const acceptFile = async (peerId: string) => {
+  // ── Accept an incoming file ──
+  const acceptFile = async (peerId: string, transfer_id?: string) => {
     const pending = pendingSignals.get(peerId);
-    
-    if (!pending || pending.signal.type !== 'offer') {
-      console.warn(`[P2P] No pending offer found for ${peerId}`);
-      return;
+    if (!pending || pending.signal.type !== 'offer') { 
+      console.warn('[P2P] No pending offer'); 
+      if (transfer_id) {
+        setTransfers(p => {
+          if (p.find(t => t.id === transfer_id)) return p.map(t => t.id === transfer_id ? { ...t, status: 'error' } : t);
+          return [...p, { id: transfer_id, name: 'File', size: 0, progress: 0, status: 'error', direction: 'receiving', peerId }];
+        });
+      }
+      return; 
     }
 
-    console.log(`[P2P] User accepted transfer from ${peerId}. Completing handshake...`);
+    if (transfer_id) {
+       setTransfers(p => {
+         if (p.find(t => t.id === transfer_id)) return p.map(t => t.id === transfer_id ? { ...t, status: 'connecting' } : t);
+         return [...p, { id: transfer_id, name: 'File', size: 0, progress: 0, status: 'connecting', direction: 'receiving', peerId }];
+       });
+    }
+
+    console.log(`[P2P] Accepting from ${peerId}`);
     const pc = peerConnections.get(peerId);
     if (!pc) return;
 
-    try {
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      send({
-        type: 'webrtc_signaling',
-        recipient_id: peerId,
-        payload: { type: 'answer', payload: answer }
-      });
-      pendingSignals.delete(peerId);
-      console.log('[P2P] Answer sent to sender');
-    } catch (err) {
-      console.error('[P2P] Failed to create/send answer:', err);
-    }
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    sendRef.current({ type: 'webrtc_signaling', recipient_id: peerId, payload: { type: 'answer', payload: answer } });
+    pendingSignals.delete(peerId);
+    console.log('[P2P] Answer sent');
   };
 
   return (

@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
+import React from 'react';
 import { api, WS_BASE } from '../lib/api';
 import { getOrCreateDeviceId, generateIdentityKey } from '../lib/crypto';
 
@@ -6,6 +7,7 @@ interface AuthState {
   token: string | null;
   accountId: string | null;
   username: string | null;
+  isAdmin: boolean;
 }
 
 interface AuthContextValue extends AuthState {
@@ -21,6 +23,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     token: localStorage.getItem('nls_token'),
     accountId: localStorage.getItem('nls_account_id'),
     username: localStorage.getItem('nls_username'),
+    isAdmin: localStorage.getItem('nls_is_admin') === 'true',
   });
 
   const register = useCallback(async (username: string, password: string) => {
@@ -41,8 +44,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem('nls_token', result.token);
     localStorage.setItem('nls_account_id', result.account_id);
     localStorage.setItem('nls_username', username);
+    localStorage.setItem('nls_is_admin', result.is_admin ? 'true' : 'false');
 
-    setState({ token: result.token, accountId: result.account_id, username });
+    setState({ token: result.token, accountId: result.account_id, username, isAdmin: result.is_admin === true });
   }, []);
 
   const login = useCallback(async (username: string, password: string) => {
@@ -52,15 +56,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem('nls_token', result.token);
     localStorage.setItem('nls_account_id', result.account_id);
     localStorage.setItem('nls_username', username);
+    localStorage.setItem('nls_is_admin', result.is_admin ? 'true' : 'false');
 
-    setState({ token: result.token, accountId: result.account_id, username });
+    setState({ token: result.token, accountId: result.account_id, username, isAdmin: result.is_admin === true });
   }, []);
 
   const logout = useCallback(() => {
     localStorage.removeItem('nls_token');
     localStorage.removeItem('nls_account_id');
     localStorage.removeItem('nls_username');
-    setState({ token: null, accountId: null, username: null });
+    localStorage.removeItem('nls_is_admin');
+    localStorage.removeItem('nls_device_id');
+    setState({ token: null, accountId: null, username: null, isAdmin: false });
   }, []);
 
   return (
@@ -79,6 +86,8 @@ export function useAuth() {
 interface WebSocketContextValue {
   socket: WebSocket | null;
   isConnected: boolean;
+  onlineUserIds: Set<string>;
+  setOnlineUserIds: React.Dispatch<React.SetStateAction<Set<string>>>;
   send: (payload: object) => void;
   addListener: (callback: (msg: any) => void) => void;
   removeListener: (callback: (msg: any) => void) => void;
@@ -89,6 +98,7 @@ const WebSocketContext = createContext<WebSocketContextValue | null>(null);
 export function WebSocketProvider({ children }: { children: ReactNode }) {
   const { token } = useAuth();
   const [isConnected, setIsConnected] = useState(false);
+  const [onlineUserIds, setOnlineUserIds] = useState<Set<string>>(new Set());
   const socketRef = useRef<WebSocket | null>(null);
   const listeners = useRef<Set<(msg: any) => void>>(new Set());
   const reconnectTimeoutRef = useRef<any>(null);
@@ -114,10 +124,24 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const connect = useCallback(() => {
-    if (!token) return;
+    if (!token) {
+      if (socketRef.current) {
+        socketRef.current.close();
+        socketRef.current = null;
+      }
+      setIsConnected(false);
+      return;
+    }
 
-    if (socketRef.current) {
-      socketRef.current.close();
+    // If already connecting or open, don't start another one
+    if (socketRef.current && (socketRef.current.readyState === WebSocket.CONNECTING || socketRef.current.readyState === WebSocket.OPEN)) {
+      return;
+    }
+
+    // Clear any pending reconnects
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
     }
 
     console.log('[WS] Connecting to LAN server...');
@@ -125,14 +149,18 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
     socketRef.current = ws;
 
     ws.onopen = () => {
-      if (socketRef.current !== ws) return;
+      if (socketRef.current !== ws) {
+        ws.close();
+        return;
+      }
       console.log('[WS] Socket Connected');
       setIsConnected(true);
       flushQueue();
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-        reconnectTimeoutRef.current = null;
-      }
+      
+      // Fetch initial online users
+      api.getOnlineUsers().then(users => {
+        setOnlineUserIds(new Set(users.map((u: any) => u.id)));
+      }).catch(err => console.error('[WS] Failed to fetch initial online users:', err));
     };
 
     ws.onmessage = (event) => {
@@ -145,23 +173,35 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
           console.log('%c[WS] MY PEER ID: ' + msg.accountId, 'background: #222; color: #bada55; font-size: 1.2em; font-weight: bold;');
         }
         
+        if (msg.type === 'presence_update') {
+          setOnlineUserIds(prev => {
+            const next = new Set(prev);
+            if (msg.status === 'online') {
+              next.add(msg.accountId);
+            } else {
+              next.delete(msg.accountId);
+            }
+            return next;
+          });
+        }
+        
         listeners.current.forEach((cb: (msg: any) => void) => cb(msg));
       } catch {
         console.warn('[WS] Non-JSON message:', event.data);
       }
     };
 
-    ws.onclose = () => {
-      console.log('[WS] Socket Disconnected');
+    ws.onclose = (e) => {
+      console.log(`[WS] Socket Disconnected (Code: ${e.code}, Reason: ${e.reason})`);
       
-      // Only null out and trigger reconnect if this is STILL the current socket
       if (socketRef.current === ws) {
         socketRef.current = null;
         setIsConnected(false);
+        setOnlineUserIds(new Set());
         
         if (token && !reconnectTimeoutRef.current) {
-          console.log('[WS] Reconnecting in 2s...');
-          reconnectTimeoutRef.current = setTimeout(connect, 2000);
+          console.log('[WS] Reconnecting in 3s...');
+          reconnectTimeoutRef.current = setTimeout(connect, 3000);
         }
       }
     };
@@ -171,13 +211,15 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
         console.error('[WS] Socket Error:', err);
       }
     };
-  }, [token]);
+  }, [token, flushQueue]);
 
   useEffect(() => {
     connect();
     return () => {
       if (socketRef.current) {
-        socketRef.current.close();
+        const ws = socketRef.current;
+        socketRef.current = null; // Important: Clear ref before closing to prevent onclose trigger
+        ws.close();
       }
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
@@ -196,7 +238,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <WebSocketContext.Provider value={{ socket: socketRef.current, isConnected, send, addListener, removeListener }}>
+    <WebSocketContext.Provider value={{ socket: socketRef.current, isConnected, onlineUserIds, setOnlineUserIds, send, addListener, removeListener }}>
       {children}
     </WebSocketContext.Provider>
   );

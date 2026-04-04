@@ -2,7 +2,7 @@
 // In Electron, nodeIntegration=true so we could also use node:http,
 // but fetch is available in Electron's renderer (Chromium), so we use it for consistency.
 
-export const API_BASE = (window as any).__NLS_API_URL__ ?? 'http://localhost:3004';
+export const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:3004';
 export const WS_BASE = API_BASE.replace(/^http/, 'ws');
 
 export interface RegisterPayload {

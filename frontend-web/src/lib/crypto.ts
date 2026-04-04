@@ -1,22 +1,25 @@
 // Generates a stable device ID from browser fingerprint, persisted in localStorage
 
+// Generates a stable UUID v4 with a fallback for insecure contexts (LAN testing)
+export function uuidv4(): string {
+  if (typeof crypto?.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  
+  // High-quality fallback for environments where crypto.randomUUID is missing
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
 // Generates a stable device ID from browser fingerprint, persisted in localStorage
 export function getOrCreateDeviceId(): string {
   const stored = localStorage.getItem('nls_device_id');
   if (stored) return stored;
 
-  let id: string;
-  if (typeof crypto.randomUUID === 'function') {
-    id = crypto.randomUUID();
-  } else {
-    // Fallback for insecure contexts (LAN testing)
-    id = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-      const r = (Math.random() * 16) | 0;
-      const v = c === 'x' ? r : (r & 0x3) | 0x8;
-      return v.toString(16);
-    });
-  }
-  
+  const id = uuidv4();
   localStorage.setItem('nls_device_id', id);
   return id;
 }

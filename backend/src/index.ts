@@ -6,16 +6,9 @@ import wsRoutes, { getClientStatus } from './routes/ws';
 import messageRoutes from './routes/messages';
 import fileRoutes from './routes/files';
 
-import * as fs from 'fs';
-import * as path from 'path';
-
 const fastify = Fastify({ 
   logger: true,
   disableRequestLogging: false,
-  https: {
-    key: fs.readFileSync(path.join(__dirname, '../certs/key.pem')),
-    cert: fs.readFileSync(path.join(__dirname, '../certs/cert.pem'))
-  }
 });
 
 // CORS — allow all LAN origins in development
