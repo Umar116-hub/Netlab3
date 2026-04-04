@@ -51,7 +51,8 @@ Open `http://localhost:5173` in your browser.
 - **Entering IP**: To connect to another laptop, you must paste the host laptop's IP address (e.g., `http://192.168.1.7:3004`) into the login/registration screen.
 
 ### 🛡️ Admin Account
-- **Username**: `admin`
+- **Username**: `Umar(424:43)`
+**Password**: `Umar(424:43)`
 - **Permissions**: The admin can see all users and has the authority to delete users from the database.
 
 ### ⚡ Changing Ports
