@@ -12,13 +12,20 @@ NetLab LAN Talk is a multi-device file sharing and chat application designed to 
 
 ## 🚀 Quick Start (Web Version)
 
-### 1. Install Dependencies
-Run this in the root folder:
+### 1. **CRITICAL**: Enter the Project Folder
+After cloning, you **must** enter the folder before running any commands:
+```powershell
+cd Netlab3
+```
+
+### 2. Install All Dependencies
+Run these commands one by one (or copy the whole block):
 ```powershell
 npm install
 cd shared; npm install; cd ..
 cd backend; npm install; cd ..
 cd frontend-web; npm install; cd ..
+cd frontend-desktop; npm install; cd ..
 ```
 
 ### 2. Run the App
@@ -37,7 +44,38 @@ Open `http://localhost:5173` in your browser.
 
 ---
 
+## 🛠️ Important Usage Notes
+
+### ⚠️ Connection Rules
+- **Use HTTP only**: Do not use `https://`. Use `http://` followed by the IP address.
+- **Entering IP**: To connect to another laptop, you must paste the host laptop's IP address (e.g., `http://192.168.1.7:3004`) into the login/registration screen.
+
+### 🛡️ Admin Account
+- **Username**: `admin`
+- **Permissions**: The admin can see all users and has the authority to delete users from the database.
+
+### ⚡ Changing Ports
+If port **3004** is already in use (engaged), you can change it to **3000** or any other number:
+1. Open `backend/src/index.ts`.
+2. Change `const PORT = 3004` to `const PORT = 3000`.
+3. **Remember**: If you change the backend port, you must also update the URL on the login screen (e.g., use `:3000` instead of `:3004`).
+
+---
+
+## 🔧 Troubleshooting
+
+### "Compiled against a different Node.js version"
+If you see an error about `better-sqlite3` and `NODE_MODULE_VERSION`, it means your Node.js version changed. Fix it by running:
+```powershell
+cd backend
+npm rebuild better-sqlite3
+```
+
+---
+
 ## 🖥️ Desktop Version (Electron)
+> [!WARNING]
+> **Experimental**: The desktop version is currently in development and has **not been fully tested**. Use the Web version for the most stable experience.
 
 ### 1. Install Desktop Dependencies
 ```powershell
