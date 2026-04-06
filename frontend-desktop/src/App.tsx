@@ -11,7 +11,7 @@ export interface Message {
 }
 
 function P2PApp() {
-  const { myName, contacts, messages, sendMessage, clearUnread } = useDesktopNet();
+  const { myName, contacts, clearUnread } = useDesktopNet();
   const [activeContactId, setActiveContactId] = useState<string | null>(null);
 
   const handleSelectContact = (id: string | null) => {
@@ -21,13 +21,6 @@ function P2PApp() {
     }
   };
 
-  const handleSendMessage = async (text: string) => {
-    if (!activeContactId) return;
-    await sendMessage(activeContactId, text);
-  };
-
-  const activeContact = contacts.find(c => c.id === activeContactId) ?? null;
-  const activeMessages = activeContactId ? (messages[activeContactId] ?? []) : [];
 
   return (
     <div className="layout-container">

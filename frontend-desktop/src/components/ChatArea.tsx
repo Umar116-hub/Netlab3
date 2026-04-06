@@ -10,10 +10,9 @@ const ChatArea = ({ contactId }: ChatAreaProps) => {
   const [inputText, setInputText] = useState('');
   const [stagedFile, setStagedFile] = useState<any>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   
   const { 
-    myId, contacts, messages, transfers, 
+    contacts, messages, transfers, 
     sendMessage, sendFileOffer, acceptFile, 
     pauseTransfer, resumeTransfer, cancelTransfer 
   } = useDesktopNet();
