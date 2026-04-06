@@ -42,11 +42,7 @@ function P2PApp() {
         currentUser={myName}
         onLogout={() => {}}
       />
-      <ChatArea
-        contact={activeContact}
-        messages={activeMessages}
-        onSendMessage={handleSendMessage}
-      />
+      <ChatArea contactId={activeContactId} />
     </div>
   );
 }
