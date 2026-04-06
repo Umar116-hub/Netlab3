@@ -25,9 +25,10 @@ class SignalingServer {
 
   start(port: number) {
     this.server = net.createServer((socket) => {
-      let buffer = '';
+      let buffer = Buffer.alloc(0);
+      
       socket.on('data', (chunk) => {
-        buffer += chunk.toString();
+        buffer = Buffer.concat([buffer, chunk]);
       });
       
       socket.on('error', (err) => {
@@ -35,15 +36,23 @@ class SignalingServer {
       });
 
       socket.on('end', () => {
-        if (!buffer) return;
+        if (buffer.length === 0) return;
         try {
-          const message = JSON.parse(buffer);
+          const messageStr = buffer.toString('utf8');
+          const message = JSON.parse(messageStr);
+          const rawIp = socket.remoteAddress;
+          const fromIp = rawIp?.includes('::') ? rawIp.split(':').pop() : rawIp;
+          
+          console.log('[P2P] Received signaling from', fromIp, 'Type:', message.type);
+          
           sendToRenderer('p2p:receive-direct-signaling', {
-            fromIp: socket.remoteAddress?.replace(/^.*:/, ''), 
+            fromIp: fromIp || '127.0.0.1', 
             payload: message
           });
         } catch (err) {
-          console.error('[P2P] Failed to parse signaling message:', err, 'Buffer:', buffer);
+          console.error('[P2P] Failed to parse signaling message:', err, 'Raw Data:', buffer.toString());
+        } finally {
+          socket.destroy();
         }
       });
     });

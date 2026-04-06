@@ -151,6 +151,9 @@ export const DesktopNetProvider = ({ children }: { children: ReactNode }) => {
           if (existing) return prev.map(t => t.id === payload.transferId ? { ...t, ...newOffer } : t);
           return [...prev, newOffer];
         });
+      } else if (payload.type === 'file_accept') {
+        const transferId = payload.transferId;
+        setTransfers(prev => prev.map(t => t.id === transferId ? { ...t, status: 'active' } : t));
       } else if (payload.type === 'transfer_paused') {
         setTransfers(prev => prev.map(t => t.id === payload.transferId ? { ...t, status: 'paused' } : t));
       } else if (payload.type === 'transfer_resumed') {
@@ -259,6 +262,12 @@ export const DesktopNetProvider = ({ children }: { children: ReactNode }) => {
                savePath: savePath,
                totalBytes: t.size,
                transferId: t.id
+           });
+
+           // Notify sender that we accepted!
+           ipcRenderer.invoke('p2p:send-direct-signaling', {
+             ip: t.ip, port: 54546,
+             payload: { type: 'file_accept', from: myId, transferId: t.id }
            });
         }
         ipcRenderer.removeListener('p2p:save-path-selected', handleSavePath);
