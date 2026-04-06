@@ -98,31 +98,33 @@ function createWindow() {
   });
 }
 
+// 0. GLOBAL HANDLERS: Register these EARLIEST before app is even "ready"
+// This solves the 'No handler registered' error for fast-loading windows
+ipcMain.handle('p2p:get-my-info', async () => {
+  try {
+    const machineIdModule = await import('node-machine-id').catch(() => null);
+    const machineIdFn = machineIdModule?.machineIdSync ?? machineIdModule?.default?.machineIdSync;
+    const myId = machineIdFn ? machineIdFn() : os.hostname();
+    return { id: myId, name: os.hostname() };
+  } catch (e) {
+    return { id: os.hostname(), name: os.hostname() };
+  }
+});
+
+ipcMain.handle('p2p:get-lan-ip', () => getLanIp());
+
+ipcMain.handle('p2p:renderer-ready', () => {
+  rendererReady = true;
+  console.log('[P2P] Renderer ready, flushing', messageQueue.length, 'messages');
+  while (messageQueue.length > 0 && mainWindow) {
+    const { channel, data } = messageQueue.shift();
+    mainWindow.webContents.send(channel, data);
+  }
+});
+
 // STARTUP SEQUENCE: Robust against DB failures
 app.whenReady().then(async () => {
-  // 1. REGISTER CORE P2P HANDLERS FIRST (Before any DB imports that might crash)
-  ipcMain.handle('p2p:get-my-info', async () => {
-    try {
-      const machineIdModule = await import('node-machine-id').catch(() => null);
-      const machineIdFn = machineIdModule?.machineIdSync ?? machineIdModule?.default?.machineIdSync;
-      const myId = machineIdFn ? machineIdFn() : os.hostname();
-      return { id: myId, name: os.hostname() };
-    } catch (e) {
-      return { id: os.hostname(), name: os.hostname() };
-    }
-  });
-
-  ipcMain.handle('p2p:renderer-ready', () => {
-    rendererReady = true;
-    console.log('[P2P] Renderer ready, flushing', messageQueue.length, 'messages');
-    while (messageQueue.length > 0 && mainWindow) {
-      const { channel, data } = messageQueue.shift();
-      mainWindow.webContents.send(channel, data);
-    }
-  });
-
-  ipcMain.handle('p2p:get-lan-ip', () => getLanIp());
-
+  // These can stay inside ready as they are only used later
   ipcMain.handle('p2p:send-direct-signaling', async (_event, { ip, port, payload }) => {
     return new Promise((resolve, reject) => {
       const client = net.createConnection({ host: ip, port: port }, () => {
@@ -164,10 +166,10 @@ app.whenReady().then(async () => {
     return true;
   });
 
-  // 2. CREATE WINDOW
+  // 1. CREATE WINDOW
   createWindow();
 
-  // 3. LAZY LOAD DB & START SERVICES
+  // 2. LAZY LOAD DB & START SERVICES
   try {
      const dbModule = await import('./db.js').catch(() => null);
      if (dbModule) {
