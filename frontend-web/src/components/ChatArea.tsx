@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Paperclip, MoreVertical, Shield, File as FileIcon } from 'lucide-react';
+import { Send, Paperclip, MoreVertical, Shield, File as FileIcon, X, Pause, Play } from 'lucide-react';
 import type { Contact, Message } from '../App';
 import { useTransfer } from '../context/TransferContext';
 import { useWebSocket } from '../context/AuthContext';
@@ -17,7 +17,7 @@ const ChatArea = ({ contact, messages, onSendMessage, onLocalFileSent, onBack }:
   const [stagedFile, setStagedFile] = useState<File | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const { transfers, sendFile, acceptFile } = useTransfer();
+  const { transfers, sendFile, acceptFile, cancelTransfer, pauseTransfer, resumeTransfer } = useTransfer();
   const { onlineUserIds } = useWebSocket();
   
   const isOnline = contact ? onlineUserIds.has(contact.id) : false;
@@ -77,6 +77,28 @@ const ChatArea = ({ contact, messages, onSendMessage, onLocalFileSent, onBack }:
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
+  const formatDateDivider = (timestamp: string): string => {
+    try {
+      const today = new Date();
+      const msgDate = new Date(timestamp);
+      if (isNaN(msgDate.getTime())) return '';
+      const todayStr = today.toDateString();
+      const yesterday = new Date(today);
+      yesterday.setDate(today.getDate() - 1);
+      if (msgDate.toDateString() === todayStr) return 'Today';
+      if (msgDate.toDateString() === yesterday.toDateString()) return 'Yesterday';
+      return msgDate.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+    } catch { return ''; }
+  };
+
+  const formatDisplayTime = (timestamp: string): string => {
+    try {
+      const date = new Date(timestamp);
+      if (isNaN(date.getTime())) return timestamp;
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    } catch { return timestamp; }
+  };
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
@@ -123,13 +145,28 @@ const ChatArea = ({ contact, messages, onSendMessage, onLocalFileSent, onBack }:
       </div>
 
       <div className="messages-container" ref={scrollRef}>
-        {messages.map((msg) => {
-          if (!msg.file_info && !msg.text?.trim()) return null;
+        {messages.reduce<React.ReactNode[]>((acc, msg, idx) => {
+          if (!msg.file_info && !msg.text?.trim()) return acc;
+
+          // Date divider logic
+          const dividerLabel = formatDateDivider(msg.timestamp);
+          const prevMsg = messages.slice(0, idx).findLast(m => m.file_info || m.text?.trim());
+          const prevLabel = prevMsg ? formatDateDivider(prevMsg.timestamp) : '';
+          if (dividerLabel && dividerLabel !== prevLabel) {
+            acc.push(
+              <div key={`divider-${idx}`} className="date-divider">
+                <span>{dividerLabel}</span>
+              </div>
+            );
+          }
 
           const isMe = msg.senderId === 'me';
           const transfer = msg.file_info ? transfers.find(t => t.id === msg.file_info?.transfer_id) : null;
-          
-          return (
+          const isPaused = transfer?.status === 'paused';
+          const isActive = transfer?.status === 'active';
+          const isInProgress = isActive || isPaused || transfer?.status === 'connecting' || transfer?.status === 'pending';
+
+          acc.push(
             <div key={msg.id} className={`message-wrapper ${isMe ? 'sent' : 'received'}`}>
               <div style={{ maxWidth: '100%' }}>
                 {msg.file_info ? (
@@ -145,18 +182,26 @@ const ChatArea = ({ contact, messages, onSendMessage, onLocalFileSent, onBack }:
                       </div>
                     </div>
                     
-                    {transfer && transfer.status === 'active' && (
+                    {transfer && (isActive || isPaused) && (
                       <div className="file-message-progress">
                         <div 
                           className="file-message-progress-fill" 
-                          style={{ width: `${transfer.progress}%` }}
+                          style={{ width: `${transfer.progress}%`, opacity: isPaused ? 0.5 : 1, transition: 'opacity 0.3s' }}
                         ></div>
                         <div className="file-message-metrics">
-                           {transfer.speed && (
+                           {transfer.speed !== undefined && (isActive || (isPaused && transfer.pausedBy === 'peer')) && (
                              <span>{(transfer.speed / (1024 * 1024)).toFixed(1)} MB/s</span>
                            )}
-                           {transfer.timeRemaining !== undefined && transfer.timeRemaining > 0 && (
-                             <span>Remains: {Math.ceil(transfer.timeRemaining)}s</span>
+                           {isPaused && transfer.pausedBy === 'me' && <span style={{ color: 'var(--accent)', fontWeight: '600' }}>Paused</span>}
+                           {isPaused && transfer.timeRemaining === -1 && (
+                             <span>Remains: --:--</span>
+                           )}
+                           {transfer.timeRemaining !== undefined && transfer.timeRemaining > 0 && isActive && (
+                             <span>
+                               Remains: {transfer.timeRemaining > 60 
+                                 ? `${Math.floor(transfer.timeRemaining / 60)}m ${Math.floor(transfer.timeRemaining % 60)}s` 
+                                 : `${Math.ceil(transfer.timeRemaining)}s`}
+                             </span>
                            )}
                         </div>
                       </div>
@@ -171,12 +216,53 @@ const ChatArea = ({ contact, messages, onSendMessage, onLocalFileSent, onBack }:
                           Accept & Download
                         </button>
                       ) : (
-                        <span className="file-message-status">
-                          {(transfer?.status || msg.file_info?.status) === 'error' ? '✕ Unreceived' :
-                           (transfer?.status || msg.file_info?.status) === 'completed' ? '✓ Received' : 
-                           (transfer?.status === 'active' || transfer?.status === 'connecting') ? `Transferring... ${Math.round(transfer.progress)}%` : 
-                           'Sent Offer'}
-                        </span>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: '8px' }}>
+                          <span className="file-message-status">
+                            {(() => {
+                              const status = transfer?.status || msg.file_info?.status;
+                              if (status === 'completed') return '✓ Received';
+                              if (status === 'cancelled') return '✕ Cancelled';
+                              if (status === 'error') return '✕ Unreceived';
+                              if (isPaused) return `⏸ Paused at ${Math.round(transfer!.progress)}%`;
+                              if (isActive || status === 'connecting') return `Transferring... ${Math.round(transfer!.progress)}%`;
+                              return 'Sent Offer';
+                            })()}
+                          </span>
+                          
+                          {isInProgress && (
+                            <div className="transfer-controls" style={{ display: 'flex', gap: '4px' }}>
+                              <button 
+                                className="icon-btn" 
+                                title={isPaused 
+                                  ? (transfer?.pausedBy === 'peer' ? 'Waiting for peer to resume' : 'Resume Transfer') 
+                                  : 'Pause Transfer'}
+                                disabled={isPaused && transfer?.pausedBy === 'peer'}
+                                onClick={() => isPaused 
+                                  ? resumeTransfer(msg.file_info?.transfer_id || '')
+                                  : pauseTransfer(msg.file_info?.transfer_id || '')}
+                                style={{ 
+                                  color: isPaused ? 'var(--accent)' : 'var(--text-secondary)', 
+                                  padding: '4px',
+                                  background: isPaused ? 'rgba(var(--accent-rgb, 99, 102, 241), 0.15)' : 'transparent',
+                                  borderRadius: '4px',
+                                  opacity: (isPaused && transfer?.pausedBy === 'peer') ? 0.3 : 1,
+                                  cursor: (isPaused && transfer?.pausedBy === 'peer') ? 'not-allowed' : 'pointer'
+                                }}
+                              >
+                                {isPaused ? <Play size={16} /> : <Pause size={16} />}
+                              </button>
+                              <button 
+                                className="icon-btn" 
+                                title="Cancel Transfer"
+                                onClick={() => cancelTransfer(msg.file_info?.transfer_id || '', 
+                                  isMe ? contact?.id || '' : msg.senderId)}
+                                style={{ color: '#ef4444', padding: '4px', background: 'rgba(239, 68, 68, 0.1)', borderRadius: '4px' }}
+                              >
+                                <X size={16} />
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       )}
                     </div>
                   </div>
@@ -186,11 +272,12 @@ const ChatArea = ({ contact, messages, onSendMessage, onLocalFileSent, onBack }:
                     {msg.text}
                   </div>
                 )}
-                <span className="message-time">{msg.timestamp}</span>
+                <span className="message-time">{formatDisplayTime(msg.timestamp)}</span>
               </div>
             </div>
           );
-        })}
+          return acc;
+        }, [])}
       </div>
 
       <div className="chat-input-container">

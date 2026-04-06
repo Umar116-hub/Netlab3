@@ -178,6 +178,8 @@ export default async function wsRoutes(fastify: FastifyInstance) {
             // Fallthrough to route the update to the recipient
           case 'webrtc_signaling':
           case 'file_offer':
+          case 'file_pause':
+          case 'file_resume':
             // Route to all active devices of the recipient
             let recipientId = payload.to || payload.recipient_id;
             if (typeof recipientId !== 'string' && recipientId) {

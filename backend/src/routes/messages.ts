@@ -157,11 +157,34 @@ export default async function messageRoutes(fastify: FastifyInstance) {
     if (!transfer_id || !status) return reply.status(400).send({ error: 'Missing transfer_id or status' });
 
     try {
-      db.prepare(`
-        UPDATE messages 
-        SET metadata_json = json_set(metadata_json, '$.file_info.status', ?)
-        WHERE json_extract(metadata_json, '$.file_info.transfer_id') = ?
-      `).run(status, transfer_id);
+      // Find the message by transfer_id
+      const msg = db.prepare("SELECT id, metadata_json FROM messages WHERE json_extract(metadata_json, '$.file_info.transfer_id') = ?").get(transfer_id) as any;
+      if (!msg) {
+        console.warn(`[DB] No message found for transfer_id: ${transfer_id}`);
+        return reply.status(404).send({ error: 'Message not found' });
+      }
+
+      // Parse and update metadata_json robustly
+      let meta = {};
+      try { meta = JSON.parse(msg.metadata_json || '{}'); } catch {}
+      
+      const currentStatus = (meta as any).file_info?.status || (meta as any).status;
+      
+      // STATUS LOCKDOWN: If already completed or cancelled, ignore any non-final updates
+      if (['completed', 'cancelled'].includes(currentStatus) && status === 'error') {
+        console.log(`[DB] Ignored obsolete error report for locked transfer ${transfer_id} (current: ${currentStatus})`);
+        return reply.status(200).send({ ok: true, ignored: true });
+      }
+
+      if ((meta as any).file_info) {
+        (meta as any).file_info.status = status;
+      } else {
+        (meta as any).status = status; // fallback
+      }
+
+      db.prepare("UPDATE messages SET metadata_json = ? WHERE id = ?").run(JSON.stringify(meta), msg.id);
+      
+      console.log(`%c[DB] Transfer ${transfer_id} -> ${status}`, status === 'completed' ? 'color:#4CAF50;font-weight:bold' : status === 'error' ? 'color:#f44336;font-weight:bold' : '');
 
       // Notify the other party via WS if online
       if (to) {

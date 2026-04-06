@@ -13,6 +13,7 @@
   --accent-secondary: #8b5cf6;
   --error: #ef4444;
   --success: #10b981;
+  --warning: #f59e0b;
   --message-sent: linear-gradient(135deg, #6366f1, #8b5cf6);
   --message-received: #1e2230;
 }
@@ -337,10 +338,33 @@ html, body, #root {
   gap: 16px;
 }
 
+.date-divider {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 24px 0 16px;
+  position: relative;
+  width: 100%;
+}
+
+.date-divider span {
+  background-color: var(--bg-surface);
+  color: var(--text-secondary);
+  padding: 6px 16px;
+  border-radius: 14px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  border: 1px solid var(--border-color);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  backdrop-filter: blur(8px);
+}
+
 .message-wrapper {
   display: flex;
-  max-width: 70%;
-  animation: fadeIn 0.3s ease forwards;
+  max-width: 75%;
+  animation: fadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
 .message-wrapper.sent {
@@ -375,10 +399,11 @@ html, body, #root {
 
 .message-time {
   font-size: 0.7rem;
-  color: rgba(255, 255, 255, 0.7);
+  color: rgba(255, 255, 255, 0.6);
   margin-top: 6px;
   text-align: right;
   display: block;
+  white-space: nowrap;
 }
 
 .received .message-time {

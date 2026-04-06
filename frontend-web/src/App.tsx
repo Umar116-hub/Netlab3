@@ -51,7 +51,7 @@ function ChatApp() {
           id: rawTime.toString(),
           senderId,
           text: msg.text ?? '',
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          timestamp: new Date().toISOString(),
           rawTime,
           file_info: msg.file_info,
         };
@@ -73,7 +73,7 @@ function ChatApp() {
           id: rawTime.toString(),
           senderId,
           text: '',
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          timestamp: new Date().toISOString(),
           rawTime,
           file_info: { ...msg.file_info, status: 'pending' },
         };
@@ -144,7 +144,7 @@ function ChatApp() {
             id: m.id,
             senderId: m.sender_account_id === accountId ? 'me' : m.sender_account_id,
             text: m.text,
-            timestamp: new Date(isoStr).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+            timestamp: new Date(isoStr).toISOString(),
             rawTime: new Date(isoStr).getTime(),
             file_info: m.file_info
           };
@@ -170,7 +170,7 @@ function ChatApp() {
       id: Date.now().toString(),
       senderId: 'me',
       text,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      timestamp: new Date().toISOString(),
     };
 
     setMessages(prev => ({
@@ -187,7 +187,7 @@ function ChatApp() {
       id: Date.now().toString(),
       senderId: 'me',
       text: '',
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      timestamp: new Date().toISOString(),
       file_info: { ...file_info, status: 'pending' }
     };
 
