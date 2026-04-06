@@ -52,14 +52,66 @@ html, body, #root {
 .sidebar-header {
   padding: 24px 20px;
   border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sidebar-header-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .sidebar-header h1 {
-  font-size: 1.2rem;
+  font-size: 1.25rem;
   font-weight: 700;
   background: linear-gradient(135deg, #a5b4fc, #c4b5fd);
   background-clip: text;
   color: transparent;
+}
+
+.sidebar-username {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+.sidebar-header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.search-container {
+  padding: 16px 20px;
+  position: relative;
+}
+
+.search-input {
+  width: 100%;
+  padding: 10px 16px 10px 40px;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.9rem;
+  transition: all 0.2s ease;
+  outline: none;
+}
+
+.search-input:focus {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.2);
+}
+
+.search-icon {
+  position: absolute;
+  left: 32px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-secondary);
+  pointer-events: none;
 }
 
 .contact-list {

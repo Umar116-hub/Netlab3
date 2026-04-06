@@ -107,17 +107,24 @@ export const DesktopNetProvider = ({ children }: { children: ReactNode }) => {
             : c
         ));
       } else if (payload.type === 'file_offer') {
-        setTransfers(prev => [...prev, {
+        const newOffer = {
           id: payload.transferId,
           peerId: payload.from,
           name: payload.fileName,
           size: payload.fileSize,
           progress: 0,
-          status: 'pending',
-          direction: 'receiving',
+          status: 'pending' as const,
+          direction: 'receiving' as const,
           ip: fromIp,
-          port: payload.port // Store the port provided by the sender
-        }]);
+          port: payload.port
+        };
+        setTransfers(prev => {
+          const existing = prev.find(t => t.id === payload.transferId);
+          if (existing) {
+            return prev.map(t => t.id === payload.transferId ? { ...t, ...newOffer } : t);
+          }
+          return [...prev, newOffer];
+        });
       } else if (payload.type === 'transfer_paused') {
         setTransfers(prev => prev.map(t => t.id === payload.transferId ? { ...t, status: 'paused' } : t));
       } else if (payload.type === 'transfer_resumed') {
@@ -191,17 +198,11 @@ export const DesktopNetProvider = ({ children }: { children: ReactNode }) => {
         progress: 0, status: 'pending', direction: 'sending'
      }]);
 
-     // Send offer to receiver via signaling server
-     const ok = await ipcRenderer.invoke('p2p:send-direct-signaling', {
-         ip: contact.ip, port: 54546, 
-         payload: { type: 'file_offer', from: myId, transferId, fileName: fileObj.name, fileSize: fileObj.size }
-     });
-
-     if (ok) {
-        // Only start the file sender server if the offer was successfully signaled
-        const portInfo = await ipcRenderer.invoke('p2p:start-sender', { filePath: fileObj.path });
-        
-        // RE-SEND the offer with the actual PORT so the receiver knows where to connect
+     // Start the file sender and get the ACTUAL dynamic port
+     const portInfo = await ipcRenderer.invoke('p2p:start-sender', { filePath: fileObj.path });
+     
+     if (portInfo && portInfo.port) {
+        // NOW send the single offer with the correct port
         await ipcRenderer.invoke('p2p:send-direct-signaling', {
            ip: contact.ip, port: 54546, 
            payload: { type: 'file_offer', from: myId, transferId, fileName: fileObj.name, fileSize: fileObj.size, port: portInfo.port }
