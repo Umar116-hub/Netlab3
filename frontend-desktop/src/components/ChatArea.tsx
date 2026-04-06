@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Paperclip, MoreVertical, Shield, File as FileIcon, Pause, Play, X, Download } from 'lucide-react';
+import { Send, Paperclip, MoreVertical, Shield, File as FileIcon, Pause, Play, X } from 'lucide-react';
 import { useDesktopNet } from '../context/DesktopNetProvider';
 import type { DesktopContact, DesktopMessage } from '../context/DesktopNetProvider';
 
@@ -13,7 +13,7 @@ interface ChatAreaProps {
 const ChatArea = ({ contact, messages, onSendMessage, onBack }: ChatAreaProps) => {
   const [inputText, setInputText] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
-  const { transfers, sendFile, acceptFile, rejectFile, pauseTransfer, resumeTransfer, cancelTransfer } = useDesktopNet();
+  const { transfers, sendFile, acceptFile, pauseTransfer, resumeTransfer, cancelTransfer } = useDesktopNet();
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -36,13 +36,7 @@ const ChatArea = ({ contact, messages, onSendMessage, onBack }: ChatAreaProps) =
     }
   };
 
-  const formatFileSize = (bytes: number) => {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  };
+  // formatFileSize removed because it was only used in the old overlay logic
 
   const formatDateDivider = (id: string): string => {
     try {
@@ -116,7 +110,7 @@ const ChatArea = ({ contact, messages, onSendMessage, onBack }: ChatAreaProps) =
       {transfers.length > 0 && (
         <div className="transfer-panel">
           {transfers.filter(t => t.status !== 'cancelled').map(t => (
-            <div key={t.id} className="transfer-card">
+            <div key={`${t.id}-${t.direction}`} className="transfer-card">
               <div className="transfer-card-header">
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
                   <FileIcon size={14} className="text-secondary" />

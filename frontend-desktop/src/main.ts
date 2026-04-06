@@ -127,6 +127,12 @@ ipcMain.handle('db:get-contacts', () => {
 
 // P2P IPC Handlers
 ipcMain.handle('p2p:get-lan-ip', () => getLanIp());
+ipcMain.handle('p2p:get-my-info', async () => {
+    const machineIdModule = await import('node-machine-id').catch(() => null);
+    const machineIdFn = machineIdModule?.machineIdSync ?? machineIdModule?.default?.machineIdSync;
+    const myId = machineIdFn ? machineIdFn() : os.hostname();
+    return { id: myId, name: os.hostname() };
+});
 
 ipcMain.handle('p2p:send-direct-signaling', async (_event, { ip, port, payload }) => {
   return new Promise((resolve, reject) => {
