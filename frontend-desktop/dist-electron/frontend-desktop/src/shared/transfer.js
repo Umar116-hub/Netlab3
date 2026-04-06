@@ -2,45 +2,59 @@ import net from 'net';
 import fs from 'fs';
 export class FileSender {
     server = null;
+    currentSocket = null;
+    currentReadStream = null;
+    bytesSent = 0;
+    totalBytes = 0;
+    transferId = '';
+    filePath = '';
     start(filePath, onProgress) {
+        this.filePath = filePath;
+        const stats = fs.statSync(filePath);
+        this.totalBytes = stats.size;
+        this.transferId = `tx-${Math.random().toString(36).substring(7)}`;
+        this.bytesSent = 0;
         return new Promise((resolve, reject) => {
-            const stats = fs.statSync(filePath);
-            const totalBytes = stats.size;
-            const transferId = Math.random().toString(36).substring(7);
             this.server = net.createServer((socket) => {
-                console.log('Receiver connected to TCP server');
-                let bytesSent = 0;
-                const readStream = fs.createReadStream(filePath);
-                readStream.on('data', (chunk) => {
-                    bytesSent += chunk.length;
+                console.log('[Transfer] Receiver connected');
+                this.currentSocket = socket;
+                // Start from where we left off
+                this.currentReadStream = fs.createReadStream(this.filePath, { start: this.bytesSent });
+                this.currentReadStream.on('data', (chunk) => {
+                    this.bytesSent += chunk.length;
                     onProgress({
-                        transferId,
-                        bytesTransferred: bytesSent,
-                        totalBytes,
+                        transferId: this.transferId,
+                        bytesTransferred: this.bytesSent,
+                        totalBytes: this.totalBytes,
                         status: 'active'
                     });
                 });
-                readStream.on('end', () => {
-                    onProgress({
-                        transferId,
-                        bytesTransferred: totalBytes,
-                        totalBytes,
-                        status: 'completed'
-                    });
-                    socket.end();
-                    this.stop();
+                this.currentReadStream.on('end', () => {
+                    if (this.bytesSent >= this.totalBytes) {
+                        onProgress({
+                            transferId: this.transferId,
+                            bytesTransferred: this.totalBytes,
+                            totalBytes: this.totalBytes,
+                            status: 'completed'
+                        });
+                        this.stop();
+                    }
                 });
-                readStream.on('error', (err) => {
+                this.currentReadStream.on('error', (err) => {
                     onProgress({
-                        transferId,
-                        bytesTransferred: bytesSent,
-                        totalBytes,
+                        transferId: this.transferId,
+                        bytesTransferred: this.bytesSent,
+                        totalBytes: this.totalBytes,
                         status: 'error',
                         error: err.message
                     });
                     this.stop();
                 });
-                readStream.pipe(socket);
+                this.currentReadStream.pipe(socket);
+                socket.on('error', (err) => {
+                    console.error('[Transfer] Socket error:', err);
+                    this.pause(); // Auto-pause on connection loss
+                });
             });
             this.server.listen(0, '0.0.0.0', () => {
                 const address = this.server?.address();
@@ -51,19 +65,26 @@ export class FileSender {
                     reject(new Error('Failed to get server port'));
                 }
             });
-            this.server.on('error', (err) => {
-                onProgress({
-                    transferId,
-                    bytesTransferred: 0,
-                    totalBytes,
-                    status: 'error',
-                    error: err.message
-                });
-                reject(err);
-            });
         });
     }
+    pause() {
+        if (this.currentReadStream) {
+            this.currentReadStream.unpipe();
+            this.currentReadStream.destroy();
+            this.currentReadStream = null;
+        }
+        if (this.currentSocket) {
+            this.currentSocket.destroy();
+            this.currentSocket = null;
+        }
+        console.log('[Transfer] Sender paused');
+    }
+    cancel() {
+        this.stop();
+        console.log('[Transfer] Sender cancelled');
+    }
     stop() {
+        this.pause();
         if (this.server) {
             this.server.close();
             this.server = null;
@@ -72,45 +93,74 @@ export class FileSender {
 }
 export class FileReceiver {
     socket = null;
+    writeStream = null;
+    bytesReceived = 0;
+    totalBytes = 0;
+    transferId = '';
+    savePath = '';
+    senderIp = '';
+    senderPort = 0;
     receive(senderIp, senderPort, savePath, totalBytes, transferId, onProgress) {
+        this.senderIp = senderIp;
+        this.senderPort = senderPort;
+        this.savePath = savePath;
+        this.totalBytes = totalBytes;
+        this.transferId = transferId;
         return new Promise((resolve, reject) => {
             this.socket = new net.Socket();
-            let bytesReceived = 0;
-            const writeStream = fs.createWriteStream(savePath);
-            this.socket.connect(senderPort, senderIp, () => {
-                console.log(`Connected to sender at ${senderIp}:${senderPort}`);
+            // 'a' flag for appending on resume
+            this.writeStream = fs.createWriteStream(this.savePath, { flags: this.bytesReceived > 0 ? 'a' : 'w' });
+            this.socket.connect(this.senderPort, this.senderIp, () => {
+                console.log(`[Transfer] Connected to sender at ${this.senderIp}:${this.senderPort}`);
             });
             this.socket.on('data', (chunk) => {
-                bytesReceived += chunk.length;
+                this.bytesReceived += chunk.length;
                 onProgress({
-                    transferId,
-                    bytesTransferred: bytesReceived,
-                    totalBytes,
+                    transferId: this.transferId,
+                    bytesTransferred: this.bytesReceived,
+                    totalBytes: this.totalBytes,
                     status: 'active'
                 });
             });
             this.socket.on('end', () => {
-                onProgress({
-                    transferId,
-                    bytesTransferred: totalBytes,
-                    totalBytes,
-                    status: 'completed'
-                });
-                writeStream.end();
-                resolve();
+                if (this.bytesReceived >= this.totalBytes) {
+                    onProgress({
+                        transferId: this.transferId,
+                        bytesTransferred: this.totalBytes,
+                        totalBytes: this.totalBytes,
+                        status: 'completed'
+                    });
+                    this.writeStream?.end();
+                    resolve();
+                }
             });
             this.socket.on('error', (err) => {
                 onProgress({
-                    transferId,
-                    bytesTransferred: bytesReceived,
-                    totalBytes,
+                    transferId: this.transferId,
+                    bytesTransferred: this.bytesReceived,
+                    totalBytes: this.totalBytes,
                     status: 'error',
                     error: err.message
                 });
-                writeStream.end();
                 reject(err);
             });
-            this.socket.pipe(writeStream);
+            this.socket.pipe(this.writeStream);
         });
+    }
+    pause() {
+        if (this.socket) {
+            this.socket.destroy();
+            this.socket = null;
+        }
+        if (this.writeStream) {
+            this.writeStream.end();
+            this.writeStream = null;
+        }
+    }
+    cancel() {
+        this.pause();
+        if (fs.existsSync(this.savePath)) {
+            fs.unlinkSync(this.savePath);
+        }
     }
 }

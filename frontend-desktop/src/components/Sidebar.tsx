@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Search, MoreVertical, LogOut, MessageSquare } from 'lucide-react';
+import { Search, LogOut, MessageSquare } from 'lucide-react';
 import type { DesktopContact } from '../context/DesktopNetProvider';
 
 interface SidebarProps {
