@@ -6,6 +6,8 @@ export interface TransferProgress {
   bytesTransferred: number;
   totalBytes: number;
   status: 'pending' | 'active' | 'completed' | 'error' | 'paused' | 'cancelled';
+  speed?: number; // bytes per second
+  timeRemaining?: number; // estimated seconds
   error?: string;
 }
 
@@ -17,6 +19,9 @@ export class FileSender {
   private totalBytes = 0;
   private transferId = '';
   private filePath = '';
+  private startTime = 0;
+  private lastReportTime = 0;
+  private lastReportBytes = 0;
 
   start(filePath: string, onProgress: (p: TransferProgress) => void): Promise<{ port: number }> {
     this.filePath = filePath;
@@ -24,6 +29,9 @@ export class FileSender {
     this.totalBytes = stats.size;
     this.transferId = `tx-${Math.random().toString(36).substring(7)}`;
     this.bytesSent = 0;
+    this.startTime = Date.now();
+    this.lastReportTime = this.startTime;
+    this.lastReportBytes = 0;
 
     return new Promise((resolve, reject) => {
       this.server = net.createServer((socket) => {
@@ -35,12 +43,24 @@ export class FileSender {
 
         this.currentReadStream.on('data', (chunk) => {
           this.bytesSent += chunk.length;
-          onProgress({
-            transferId: this.transferId,
-            bytesTransferred: this.bytesSent,
-            totalBytes: this.totalBytes,
-            status: 'active'
-          });
+          
+          const now = Date.now();
+          if (now - this.lastReportTime >= 800) { // Throttle updates for UI stability
+            const speed = (this.bytesSent - this.lastReportBytes) / ((now - this.lastReportTime) / 1000);
+            const remaining = (this.totalBytes - this.bytesSent) / speed;
+            
+            onProgress({
+              transferId: this.transferId,
+              bytesTransferred: this.bytesSent,
+              totalBytes: this.totalBytes,
+              status: 'active',
+              speed,
+              timeRemaining: isFinite(remaining) ? remaining : -1
+            });
+            
+            this.lastReportTime = now;
+            this.lastReportBytes = this.bytesSent;
+          }
         });
 
         this.currentReadStream.on('end', () => {
@@ -121,6 +141,9 @@ export class FileReceiver {
   private savePath = '';
   private senderIp = '';
   private senderPort = 0;
+  private startTime = 0;
+  private lastReportTime = 0;
+  private lastReportBytes = 0;
 
   receive(
     senderIp: string,
@@ -143,16 +166,31 @@ export class FileReceiver {
 
       this.socket.connect(this.senderPort, this.senderIp, () => {
         console.log(`[Transfer] Connected to sender at ${this.senderIp}:${this.senderPort}`);
+        this.startTime = Date.now();
+        this.lastReportTime = this.startTime;
+        this.lastReportBytes = this.bytesReceived;
       });
 
       this.socket.on('data', (chunk) => {
         this.bytesReceived += chunk.length;
-        onProgress({
-          transferId: this.transferId,
-          bytesTransferred: this.bytesReceived,
-          totalBytes: this.totalBytes,
-          status: 'active'
-        });
+        
+        const now = Date.now();
+        if (now - this.lastReportTime >= 800) {
+          const speed = (this.bytesReceived - this.lastReportBytes) / ((now - this.lastReportTime) / 1000);
+          const remaining = (this.totalBytes - this.bytesReceived) / speed;
+          
+          onProgress({
+            transferId: this.transferId,
+            bytesTransferred: this.bytesReceived,
+            totalBytes: this.totalBytes,
+            status: 'active',
+            speed,
+            timeRemaining: isFinite(remaining) ? remaining : -1
+          });
+          
+          this.lastReportTime = now;
+          this.lastReportBytes = this.bytesReceived;
+        }
       });
 
       this.socket.on('end', () => {

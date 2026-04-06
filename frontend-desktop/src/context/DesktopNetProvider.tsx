@@ -9,6 +9,12 @@ export interface DesktopMessage {
   senderId: string;
   text: string;
   timestamp: string;
+  file_info?: {
+    transfer_id: string;
+    name: string;
+    size: number;
+    status?: string;
+  };
 }
 
 export interface DesktopContact {
@@ -31,6 +37,8 @@ export interface Transfer {
   direction: 'sending' | 'receiving';
   ip?: string;
   port?: number;
+  speed?: number;
+  timeRemaining?: number;
 }
 
 interface DesktopNetContextType {
@@ -41,6 +49,7 @@ interface DesktopNetContextType {
   transfers: Transfer[];
   sendMessage: (toId: string, text: string) => Promise<boolean>;
   sendFile: (toId: string) => Promise<void>;
+  sendFileOffer: (toId: string, fileObj: any) => Promise<void>;
   acceptFile: (transferId: string) => void;
   rejectFile: (transferId: string) => void;
   pauseTransfer: (transferId: string) => void;
@@ -82,6 +91,8 @@ export const DesktopNetProvider = ({ children }: { children: ReactNode }) => {
       // Ignore our own loopback signals
       if (payload.from === myId) return;
       
+      const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
       if (payload.type === 'presence') {
         setContacts(prev => {
           const existing = prev.find(c => c.id === payload.id);
@@ -93,17 +104,11 @@ export const DesktopNetProvider = ({ children }: { children: ReactNode }) => {
       } else if (payload.type === 'chat') {
         const senderId = payload.from;
         const msgId = `${Date.now()}-${Math.random()}`;
-        const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
         setMessages(prev => {
            const existing = prev[senderId] || [];
-           // Deduplicate loopbacks or retries
            if (existing.find(m => m.text === payload.text && m.timestamp === timestamp)) return prev;
-           
-           return {
-             ...prev,
-             [senderId]: [...existing, { id: msgId, senderId, text: payload.text, timestamp }],
-           };
+           return { ...prev, [senderId]: [...existing, { id: msgId, senderId, text: payload.text, timestamp }] };
         });
 
         setContacts(prev => prev.map(c => 
@@ -112,9 +117,10 @@ export const DesktopNetProvider = ({ children }: { children: ReactNode }) => {
             : c
         ));
       } else if (payload.type === 'file_offer') {
+        const senderId = payload.from;
         const newOffer: Transfer = {
           id: payload.transferId,
-          peerId: payload.from,
+          peerId: senderId,
           name: payload.fileName,
           size: payload.fileSize,
           progress: 0,
@@ -123,6 +129,23 @@ export const DesktopNetProvider = ({ children }: { children: ReactNode }) => {
           ip: fromIp,
           port: payload.port
         };
+
+        setMessages(prev => {
+           const existing = prev[senderId] || [];
+           const fileMsg: DesktopMessage = {
+             id: payload.transferId,
+             senderId,
+             text: '',
+             timestamp,
+             file_info: {
+               transfer_id: payload.transferId,
+               name: payload.fileName,
+               size: payload.fileSize
+             }
+           };
+           return { ...prev, [senderId]: [...existing, fileMsg] };
+        });
+
         setTransfers(prev => {
           const existing = prev.find(t => t.id === payload.transferId);
           if (existing) return prev.map(t => t.id === payload.transferId ? { ...t, ...newOffer } : t);
@@ -141,7 +164,9 @@ export const DesktopNetProvider = ({ children }: { children: ReactNode }) => {
         setTransfers(prev => prev.map(t => t.id === progressEvent.transferId ? {
             ...t,
             progress: (progressEvent.bytesTransferred / progressEvent.totalBytes) * 100,
-            status: progressEvent.status === 'completed' ? 'completed' : (progressEvent.status === 'error' ? 'error' : 'active')
+            status: progressEvent.status === 'completed' ? 'completed' : (progressEvent.status === 'error' ? 'error' : 'active'),
+            speed: progressEvent.speed,
+            timeRemaining: progressEvent.timeRemaining
         } : t));
     };
 
@@ -180,24 +205,26 @@ export const DesktopNetProvider = ({ children }: { children: ReactNode }) => {
     setContacts(prev => prev.map(c => c.id === contactId ? { ...c, unreadCount: 0 } : c));
   };
 
-  const sendFile = async (toId: string) => {
+  const sendFileOffer = async (toId: string, fileObj: any) => {
      if (!ipcRenderer || !myId) return;
      const contact = contacts.find(c => c.id === toId);
      if (!contact) return;
 
-     const fileObj = await ipcRenderer.invoke('p2p:select-file');
-     if (!fileObj) return;
-
      const transferId = `tx-${Date.now()}`;
-     
-     // Deduplicate
-     setTransfers(prev => {
-        if (prev.find(t => t.id === transferId)) return prev;
-        return [...prev, {
-            id: transferId, peerId: toId, name: fileObj.name, size: fileObj.size, 
-            progress: 0, status: 'pending', direction: 'sending'
-        }];
-     });
+     const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+     setMessages(prev => ({
+       ...prev,
+       [toId]: [...(prev[toId] ?? []), { 
+         id: transferId, senderId: 'me', text: '', timestamp,
+         file_info: { transfer_id: transferId, name: fileObj.name, size: fileObj.size }
+       }],
+     }));
+
+     setTransfers(prev => [...prev, {
+        id: transferId, peerId: toId, name: fileObj.name, size: fileObj.size, 
+        progress: 0, status: 'pending', direction: 'sending', ip: contact.ip
+     }]);
 
      const portInfo = await ipcRenderer.invoke('p2p:start-sender', { filePath: fileObj.path });
      
@@ -209,18 +236,34 @@ export const DesktopNetProvider = ({ children }: { children: ReactNode }) => {
      }
   };
 
+  const sendFile = async (toId: string) => {
+     if (!ipcRenderer) return;
+     const fileObj = await ipcRenderer.invoke('p2p:select-file');
+     if (fileObj) {
+        await sendFileOffer(toId, fileObj);
+     }
+  };
+
   const acceptFile = (transferId: string) => {
      const t = transfers.find(x => x.id === transferId);
      if (!t || !ipcRenderer || !t.ip) return;
 
-     setTransfers(prev => prev.map(x => x.id === transferId ? { ...x, status: 'active' } : x));
-     ipcRenderer.invoke('p2p:start-receiver', {
-         senderIp: t.ip,
-         senderPort: (t as any).port || 54547,
-         fileName: t.name,
-         totalBytes: t.size,
-         transferId: t.id
-     });
+     ipcRenderer.send('p2p:get-save-path', t.name);
+     
+     const handleSavePath = (_e: any, savePath: string | null) => {
+        if (savePath) {
+           setTransfers(prev => prev.map(x => x.id === transferId ? { ...x, status: 'active' } : x));
+           ipcRenderer.invoke('p2p:start-receiver', {
+               senderIp: t.ip!,
+               senderPort: (t as any).port || 54547,
+               savePath: savePath,
+               totalBytes: t.size,
+               transferId: t.id
+           });
+        }
+        ipcRenderer.removeListener('p2p:save-path-selected', handleSavePath);
+     };
+     ipcRenderer.on('p2p:save-path-selected', handleSavePath);
   };
 
   const rejectFile = (_transferId: string) => {};
@@ -239,9 +282,7 @@ export const DesktopNetProvider = ({ children }: { children: ReactNode }) => {
   const resumeTransfer = (transferId: string) => {
     const t = transfers.find(x => x.id === transferId);
     if (!t || !ipcRenderer || !t.ip || !myId) return;
-    
     setTransfers(prev => prev.map(x => x.id === transferId ? { ...x, status: 'active' } : x));
-    
     if (t.direction === 'sending') {
       ipcRenderer.invoke('p2p:send-direct-signaling', { 
         ip: t.ip, port: 54546, 
@@ -267,7 +308,7 @@ export const DesktopNetProvider = ({ children }: { children: ReactNode }) => {
     <DesktopNetContext.Provider value={{ 
       myId: myId || 'Loading...', 
       myName: myName || 'User', 
-      contacts, messages, transfers, sendMessage, sendFile, acceptFile, rejectFile, 
+      contacts, messages, transfers, sendMessage, sendFile, sendFileOffer, acceptFile, rejectFile, 
       pauseTransfer, resumeTransfer, cancelTransfer, clearUnread 
     }}>
       {children}

@@ -144,13 +144,19 @@ app.whenReady().then(async () => {
     return { path: filePath, name: path.basename(filePath), size: stats.size };
   });
 
+  ipcMain.on('p2p:get-save-path', async (event, fileName) => {
+    const result = await dialog.showSaveDialog({
+      defaultPath: path.join(app.getPath('downloads'), fileName),
+      title: 'Save Received File'
+    });
+    event.reply('p2p:save-path-selected', result.canceled ? null : result.filePath);
+  });
+
   ipcMain.handle('p2p:start-sender', async (_event, { filePath }) => {
     return fileSender.start(filePath, (p) => sendToRenderer('p2p:update-progress', p));
   });
 
-  ipcMain.handle('p2p:start-receiver', async (_event, { senderIp, senderPort, fileName, totalBytes, transferId }) => {
-    const userDataPath = app.getPath('downloads');
-    const savePath = path.join(userDataPath, fileName);
+  ipcMain.handle('p2p:start-receiver', async (_event, { senderIp, senderPort, savePath, totalBytes, transferId }) => {
     return fileReceiver.receive(senderIp, senderPort, savePath, totalBytes, transferId, (p) => sendToRenderer('p2p:update-progress', p));
   });
 

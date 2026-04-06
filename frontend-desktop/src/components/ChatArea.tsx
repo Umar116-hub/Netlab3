@@ -1,30 +1,40 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Paperclip, MoreVertical, Shield, File as FileIcon, Pause, Play, X } from 'lucide-react';
+import { Send, Paperclip, File as FileIcon, X, Pause, Play, Shield } from 'lucide-react';
 import { useDesktopNet } from '../context/DesktopNetProvider';
-import type { DesktopContact, DesktopMessage } from '../context/DesktopNetProvider';
 
 interface ChatAreaProps {
-  contact: DesktopContact | null;
-  messages: DesktopMessage[];
-  onSendMessage: (text: string) => void;
-  onBack?: () => void;
+  contactId: string | null;
 }
 
-const ChatArea = ({ contact, messages, onSendMessage, onBack }: ChatAreaProps) => {
+const ChatArea = ({ contactId }: ChatAreaProps) => {
   const [inputText, setInputText] = useState('');
+  const [stagedFile, setStagedFile] = useState<any>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const { transfers, sendFile, acceptFile, pauseTransfer, resumeTransfer, cancelTransfer } = useDesktopNet();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  const { 
+    myId, contacts, messages, transfers, 
+    sendMessage, sendFileOffer, acceptFile, 
+    pauseTransfer, resumeTransfer, cancelTransfer 
+  } = useDesktopNet();
+
+  const contact = contacts.find(c => c.id === contactId);
+  const contactMessages = contactId ? (messages[contactId] || []) : [];
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, transfers]);
+  }, [contactMessages]);
 
-  const handleSend = (e: React.FormEvent) => {
+  const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (inputText.trim()) {
-      onSendMessage(inputText);
+    if (stagedFile && contactId) {
+      await sendFileOffer(contactId, stagedFile);
+      setStagedFile(null);
+    }
+    if (inputText.trim() && contactId) {
+      await sendMessage(contactId, inputText);
       setInputText('');
     }
   };
@@ -36,27 +46,41 @@ const ChatArea = ({ contact, messages, onSendMessage, onBack }: ChatAreaProps) =
     }
   };
 
-  // formatFileSize removed because it was only used in the old overlay logic
+  const handleFileSelect = async () => {
+    const ipcRenderer = (window as any).require('electron').ipcRenderer;
+    const fileObj = await ipcRenderer.invoke('p2p:select-file');
+    if (fileObj) {
+      setStagedFile(fileObj);
+    }
+  };
 
-  const formatDateDivider = (id: string): string => {
-    try {
-      const timestamp = id.includes('-') ? Date.now() : parseInt(id);
-      const msgDate = new Date(timestamp);
-      const today = new Date().toDateString();
-      const yesterday = new Date(Date.now() - 86400000).toDateString();
-      
-      if (msgDate.toDateString() === today) return 'Today';
-      if (msgDate.toDateString() === yesterday) return 'Yesterday';
-      return msgDate.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
-    } catch { return ''; }
+  const formatFileSize = (bytes: number) => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
+  const formatSpeed = (bytesPerSec?: number) => {
+    if (!bytesPerSec) return '0 B/s';
+    if (bytesPerSec > 1024 * 1024) return (bytesPerSec / (1024 * 1024)).toFixed(1) + ' MB/s';
+    return (bytesPerSec / 1024).toFixed(1) + ' KB/s';
+  };
+
+  const formatTime = (seconds?: number) => {
+    if (seconds === undefined || seconds < 0) return '--:--';
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m}:${s.toString().padStart(2, '0')}`;
   };
 
   if (!contact) {
     return (
       <div className="empty-state">
-        <Shield size={64} className="empty-state-icon" />
-        <h3>Native LAN Mode</h3>
-        <p>Your connection is secure and private. Messages and files go directly from this device to your peer.</p>
+        <Shield size={48} style={{ marginBottom: '20px', opacity: 0.5 }} />
+        <h3>Select a contact to start chatting</h3>
+        <p>Your messages and file transfers are direct and secure.</p>
       </div>
     );
   }
@@ -65,102 +89,123 @@ const ChatArea = ({ contact, messages, onSendMessage, onBack }: ChatAreaProps) =
     <div className="chat-area">
       <div className="chat-header">
         <div className="chat-header-info">
-          {onBack && (
-            <button className="icon-btn mobile-back-btn" onClick={onBack}>
-              <MoreVertical size={24} />
-            </button>
-          )}
           <div className="avatar">
             {contact.name.charAt(0).toUpperCase()}
             {contact.status === 'online' && <div className="status-indicator"></div>}
           </div>
           <div className="chat-header-text">
             <h2>{contact.name}</h2>
-            <p>{contact.status === 'online' ? 'Online' : 'Offline'} • {contact.ip}</p>
+            <p>{contact.status === 'online' ? 'Online' : 'Offline'}</p>
           </div>
-        </div>
-        <div className="header-actions">
-           <button className="icon-btn"><MoreVertical size={20} /></button>
         </div>
       </div>
 
       <div className="messages-container" ref={scrollRef}>
-        {messages.reduce<React.ReactNode[]>((acc, msg, idx) => {
-          const divider = formatDateDivider(msg.id);
-          const prevDivider = idx > 0 ? formatDateDivider(messages[idx-1].id) : null;
-          
-          if (divider && divider !== prevDivider) {
-            acc.push(<div key={`divider-${msg.id}`} className="date-divider"><span>{divider}</span></div>);
-          }
-
+        {contactMessages.map((msg) => {
           const isMe = msg.senderId === 'me';
-          acc.push(
+          const transfer = msg.file_info ? transfers.find(t => t.id === msg.file_info?.transfer_id) : null;
+          const isPaused = transfer?.status === 'paused';
+          const isActive = transfer?.status === 'active';
+
+          return (
             <div key={msg.id} className={`message-wrapper ${isMe ? 'sent' : 'received'}`}>
               <div style={{ maxWidth: '100%' }}>
-                <div className="message-bubble">{msg.text}</div>
+                {msg.file_info ? (
+                  <div className="file-message-bubble">
+                    <div className="file-message-header">
+                      <div className="file-icon-wrapper">
+                        <FileIcon size={20} />
+                      </div>
+                      <div className="file-message-info">
+                        <span className="file-message-name">{msg.file_info.name}</span>
+                        <span className="file-message-size">{formatFileSize(msg.file_info.size)}</span>
+                      </div>
+                    </div>
+
+                    {transfer && (isActive || isPaused) && (
+                      <>
+                        <div className="file-message-progress">
+                          <div 
+                            className="file-message-progress-fill" 
+                            style={{ width: `${transfer.progress}%`, opacity: isPaused ? 0.5 : 1 }}
+                          ></div>
+                        </div>
+                        <div className="file-message-metrics">
+                           <span>{formatSpeed(transfer.speed)}</span>
+                           <span>Remains: {formatTime(transfer.timeRemaining)}</span>
+                        </div>
+                      </>
+                    )}
+
+                    <div className="file-message-actions">
+                      {!isMe && (!transfer || transfer.status === 'pending') ? (
+                        <button className="file-message-btn accept" onClick={() => acceptFile(msg.file_info!.transfer_id)}>
+                          Accept & Download
+                        </button>
+                      ) : (
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                          <span className="file-message-status" style={{ fontSize: '0.75rem', opacity: 0.8 }}>
+                            {transfer?.status === 'completed' ? '✓ Received' : 
+                             transfer?.status === 'error' ? '✕ Failed' :
+                             isPaused ? '⏸ Paused' : 
+                             isActive ? `Transferring... ${Math.round(transfer.progress)}%` : 'Sent Offer'}
+                          </span>
+                          
+                          {transfer && (isActive || isPaused) && (
+                            <div style={{ display: 'flex', gap: '4px' }}>
+                              <button className="icon-btn small" onClick={() => isPaused ? resumeTransfer(transfer.id) : pauseTransfer(transfer.id)}>
+                                {isPaused ? <Play size={14} /> : <Pause size={14} />}
+                              </button>
+                              <button className="icon-btn small" style={{ color: '#ef4444' }} onClick={() => cancelTransfer(transfer.id)}>
+                                <X size={14} />
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="message-bubble">{msg.text}</div>
+                )}
                 <span className="message-time">{msg.timestamp}</span>
               </div>
             </div>
           );
-          return acc;
-        }, [])}
+        })}
       </div>
 
-      {/* Transfer Panel - High Fidelity & Non-Overlapping */}
-      {transfers.length > 0 && (
-        <div className="transfer-panel">
-          {transfers.filter(t => t.status !== 'cancelled').map(t => (
-            <div key={`${t.id}-${t.direction}`} className="transfer-card">
-              <div className="transfer-card-header">
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
-                  <FileIcon size={14} className="text-secondary" />
-                  <span className="transfer-name">{t.name}</span>
-                </div>
-                <div style={{ display: 'flex', gap: '4px' }}>
-                  {t.status === 'pending' && t.direction === 'receiving' && (
-                    <button onClick={() => acceptFile(t.id)} className="transfer-btn accept">Accept</button>
-                  )}
-                  {t.status === 'active' && (
-                    <button onClick={() => pauseTransfer(t.id)} className="icon-btn small"><Pause size={12} /></button>
-                  )}
-                  {t.status === 'paused' && (
-                    <button onClick={() => resumeTransfer(t.id)} className="icon-btn small"><Play size={12} /></button>
-                  )}
-                  {t.status !== 'completed' && (
-                    <button onClick={() => cancelTransfer(t.id)} className="icon-btn small"><X size={12} /></button>
-                  )}
-                </div>
-              </div>
-              
-              <div className="progress-bar">
-                <div className="progress-fill" style={{ width: `${t.progress}%`, background: t.status === 'completed' ? 'var(--success)' : 'var(--accent-primary)' }}></div>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', opacity: 0.7 }}>
-                <span>{t.status.toUpperCase()}</span>
-                <span>{Math.round(t.progress)}%</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
       <div className="chat-input-container">
-        <div className="input-wrapper">
-          <button className="icon-btn" onClick={() => sendFile(contact.id)} title="Attach File">
+        {stagedFile && (
+          <div className="staged-file-bar">
+            <div className="staged-file-info">
+              <FileIcon size={16} />
+              <span className="staged-file-name">{stagedFile.name}</span>
+              <span className="staged-file-size">({formatFileSize(stagedFile.size)})</span>
+            </div>
+            <div className="staged-file-actions">
+              <span className="staged-send-label">Press Airplane to send</span>
+              <button className="staged-cancel" onClick={() => setStagedFile(null)}>Cancel</button>
+            </div>
+          </div>
+        )}
+
+        <form className="input-wrapper" onSubmit={handleSend}>
+          <button type="button" className="icon-btn" onClick={handleFileSelect}>
             <Paperclip size={20} />
           </button>
           <textarea 
             className="chat-input" 
-            placeholder="Type a secure message..." 
+            placeholder="Type a message..." 
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={handleKeyDown}
             rows={1}
           />
-          <button className="send-btn" onClick={handleSend} disabled={!inputText.trim()}>
+          <button type="submit" className="send-btn" disabled={!inputText.trim() && !stagedFile}>
             <Send size={18} />
           </button>
-        </div>
+        </form>
       </div>
     </div>
   );

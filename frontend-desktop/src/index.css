@@ -193,43 +193,180 @@ html, body, #root {
 
 .message-time { font-size: 0.65rem; color: var(--text-secondary); margin-top: 4px; }
 
-/* Transfer Panel - Non-Overlapping */
-.transfer-panel {
-  padding: 10px 20px;
-  background: rgba(26, 29, 37, 0.5);
-  border-bottom: 1px solid var(--border-color);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-height: 150px;
-  overflow-y: auto;
-}
-
-.transfer-card {
-  background: var(--bg-surface);
+/* ---- File Message Bubble (Web Port) ---- */
+.file-message-bubble {
+  background: rgba(255, 255, 255, 0.05);
   border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 8px 12px;
+  border-radius: 12px;
+  padding: 12px;
+  min-width: 260px;
+  max-width: 320px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 12px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  margin-top: 4px;
 }
 
-.transfer-card-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.transfer-name { font-size: 0.8rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
-.transfer-info-small { font-size: 0.65rem; opacity: 0.6; }
+.sent .file-message-bubble {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.2);
+}
 
-.progress-bar {
-  height: 4px;
-  background: rgba(255,255,255,0.05);
-  border-radius: 2px;
+.file-message-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.file-icon-wrapper {
+  width: 40px;
+  height: 40px;
+  background: var(--bg-surface);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-primary);
+  flex-shrink: 0;
+}
+
+.file-message-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.file-message-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+  white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-primary);
 }
 
-.progress-fill {
+.file-message-size {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.file-message-progress {
+  height: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  overflow: hidden;
+  position: relative;
+}
+
+.file-message-progress-fill {
   height: 100%;
-  background: var(--accent-primary);
+  background: var(--message-sent);
   transition: width 0.3s ease;
+}
+
+.file-message-metrics {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  margin-top: 4px;
+  font-family: monospace;
+}
+
+.file-message-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.file-message-btn {
+  flex: 1;
+  padding: 8px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: none;
+}
+
+.file-message-btn.accept {
+  background: var(--message-sent);
+  color: white;
+}
+
+.file-message-btn.accept:hover {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
+/* ---- Staged File Bar ---- */
+.staged-file-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(99, 102, 241, 0.1);
+  border: 1px solid var(--accent-primary);
+  border-radius: 10px;
+  padding: 10px 16px;
+  margin-bottom: 8px;
+  animation: slideUp 0.3s ease;
+}
+
+@keyframes slideUp {
+  from { transform: translateY(10px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.staged-file-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.staged-file-name {
+  font-weight: 600;
+  font-size: 0.85rem;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.staged-file-size {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+
+.staged-file-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.staged-cancel {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.staged-cancel:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+}
+
+.staged-send-label {
+  font-size: 0.75rem;
+  color: var(--accent-primary);
+  font-weight: 600;
 }
 
 /* Chat Input Styling */
@@ -288,17 +425,12 @@ html, body, #root {
   cursor: pointer;
 }
 
-.transfer-btn {
-  padding: 4px 10px;
-  border-radius: 4px;
-  font-size: 0.65rem;
-  font-weight: 700;
-  cursor: pointer;
-  border: none;
+/* Standard button styles */
+.file-message-btn.reject { 
+  background: rgba(239, 68, 68, 0.1); 
+  color: var(--error);
+  border: 1px solid rgba(239, 68, 68, 0.2);
 }
-
-.transfer-btn.accept { background: var(--success); color: white; }
-.transfer-btn.reject { background: var(--error); color: white; opacity: 0.8; }
 
 .empty-state {
   flex: 1;
