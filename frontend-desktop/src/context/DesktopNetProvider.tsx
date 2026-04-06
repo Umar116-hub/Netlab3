@@ -27,7 +27,7 @@ export interface Transfer {
   name: string;
   size: number;
   progress: number;
-  status: 'pending' | 'active' | 'completed' | 'error';
+  status: 'pending' | 'active' | 'completed' | 'error' | 'paused' | 'cancelled';
   direction: 'sending' | 'receiving';
   ip?: string;
 }
@@ -42,6 +42,9 @@ interface DesktopNetContextType {
   sendFile: (toId: string) => Promise<void>;
   acceptFile: (transferId: string) => void;
   rejectFile: (transferId: string) => void;
+  pauseTransfer: (transferId: string) => void;
+  resumeTransfer: (transferId: string) => void;
+  cancelTransfer: (transferId: string) => void;
   clearUnread: (contactId: string) => void;
 }
 
@@ -65,6 +68,9 @@ export const DesktopNetProvider = ({ children }: { children: ReactNode }) => {
       console.warn("Not running inside Electron! IPC is disabled.");
       return;
     }
+
+    // Signal main process that we are ready to receive buffered messages
+    ipcRenderer.invoke('p2p:renderer-ready');
 
     // Ping LAN for presence 
     // Format: { type: 'presence', id, name }
@@ -109,16 +115,23 @@ export const DesktopNetProvider = ({ children }: { children: ReactNode }) => {
           progress: 0,
           status: 'pending',
           direction: 'receiving',
-          ip: fromIp
+          ip: fromIp,
+          port: payload.port // Store the port provided by the sender
         }]);
+      } else if (payload.type === 'transfer_paused') {
+        setTransfers(prev => prev.map(t => t.id === payload.transferId ? { ...t, status: 'paused' } : t));
+      } else if (payload.type === 'transfer_resumed') {
+        setTransfers(prev => prev.map(t => t.id === payload.transferId ? { ...t, status: 'active' } : t));
+      } else if (payload.type === 'transfer_cancelled') {
+        setTransfers(prev => prev.map(t => t.id === payload.transferId ? { ...t, status: 'error' } : t));
       }
     };
 
     const handleProgress = (_e: any, progressEvent: any) => {
         setTransfers(prev => prev.map(t => t.id === progressEvent.transferId ? {
             ...t,
-            progress: progressEvent.progress,
-            status: progressEvent.progress >= 100 ? 'completed' : 'active'
+            progress: (progressEvent.bytesTransferred / progressEvent.totalBytes) * 100,
+            status: progressEvent.status === 'completed' ? 'completed' : (progressEvent.status === 'error' ? 'error' : 'active')
         } : t));
     };
 
@@ -186,7 +199,13 @@ export const DesktopNetProvider = ({ children }: { children: ReactNode }) => {
 
      if (ok) {
         // Only start the file sender server if the offer was successfully signaled
-        ipcRenderer.invoke('p2p:start-sender', { filePath: fileObj.path });
+        const portInfo = await ipcRenderer.invoke('p2p:start-sender', { filePath: fileObj.path });
+        
+        // RE-SEND the offer with the actual PORT so the receiver knows where to connect
+        await ipcRenderer.invoke('p2p:send-direct-signaling', {
+           ip: contact.ip, port: 54546, 
+           payload: { type: 'file_offer', from: myId, transferId, fileName: fileObj.name, fileSize: fileObj.size, port: portInfo.port }
+        });
      }
   };
 
@@ -197,7 +216,7 @@ export const DesktopNetProvider = ({ children }: { children: ReactNode }) => {
      setTransfers(prev => prev.map(x => x.id === transferId ? { ...x, status: 'active' } : x));
      ipcRenderer.invoke('p2p:start-receiver', {
          senderIp: t.ip,
-         senderPort: 54547, // Default Desktop file transfer port from FileSender
+         senderPort: (t as any).port || 54547, // Use the dynamic port from the signal
          fileName: t.name,
          totalBytes: t.size,
          transferId: t.id
@@ -206,9 +225,53 @@ export const DesktopNetProvider = ({ children }: { children: ReactNode }) => {
 
   const rejectFile = (_transferId: string) => {};
 
+  const pauseTransfer = (transferId: string) => {
+    const t = transfers.find(x => x.id === transferId);
+    if (!t || !ipcRenderer || !t.ip) return;
+    ipcRenderer.invoke('p2p:pause-transfer');
+    setTransfers(prev => prev.map(x => x.id === transferId ? { ...x, status: 'paused' } : x));
+    // Signal peer
+    ipcRenderer.invoke('p2p:send-direct-signaling', { 
+      ip: t.ip, port: 54546, 
+      payload: { type: 'transfer_paused', transferId }
+    });
+  };
+
+  const resumeTransfer = (transferId: string) => {
+    const t = transfers.find(x => x.id === transferId);
+    if (!t || !ipcRenderer || !t.ip) return;
+    
+    setTransfers(prev => prev.map(x => x.id === transferId ? { ...x, status: 'active' } : x));
+    
+    if (t.direction === 'sending') {
+      // Re-start sender (FileSender handles the offset internally now)
+      // We'd need to re-invoke something or just let the receiver reconnect.
+      // For simplicity, usually, the receiver initiates reconnection.
+      ipcRenderer.invoke('p2p:send-direct-signaling', { 
+        ip: t.ip, port: 54546, 
+        payload: { type: 'transfer_resumed', transferId }
+      });
+    } else {
+      // Receiver connects again
+      acceptFile(transferId);
+    }
+  };
+
+  const cancelTransfer = (transferId: string) => {
+    const t = transfers.find(x => x.id === transferId);
+    if (!t || !ipcRenderer || !t.ip) return;
+    ipcRenderer.invoke('p2p:cancel-transfer');
+    setTransfers(prev => prev.map(x => x.id === transferId ? { ...x, status: 'error' } : x));
+    ipcRenderer.invoke('p2p:send-direct-signaling', { 
+      ip: t.ip, port: 54546, 
+      payload: { type: 'transfer_cancelled', transferId }
+    });
+  };
+
   return (
     <DesktopNetContext.Provider value={{ 
-      myId, myName, contacts, messages, transfers, sendMessage, sendFile, acceptFile, rejectFile, clearUnread 
+      myId, myName, contacts, messages, transfers, sendMessage, sendFile, acceptFile, rejectFile, 
+      pauseTransfer, resumeTransfer, cancelTransfer, clearUnread 
     }}>
       {children}
     </DesktopNetContext.Provider>

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Search, Edit, LogOut } from 'lucide-react';
+import { Search, MoreVertical, LogOut, MessageSquare } from 'lucide-react';
 import type { DesktopContact } from '../context/DesktopNetProvider';
 
 interface SidebarProps {
@@ -21,13 +21,10 @@ const Sidebar = ({ contacts, activeContactId, onSelectContact, currentUser, onLo
     <div className="sidebar">
       <div className="sidebar-header">
         <div className="sidebar-header-left">
-          <h1>NetLab LAN (Native)</h1>
+          <h1>NetLab LAN</h1>
           {currentUser && <span className="sidebar-username">{currentUser}</span>}
         </div>
         <div className="sidebar-header-actions">
-          <button className="icon-btn" title="New Chat">
-            <Edit size={20} />
-          </button>
           {onLogout && (
             <button className="icon-btn" title="Sign out" onClick={onLogout}>
               <LogOut size={18} />
@@ -37,11 +34,11 @@ const Sidebar = ({ contacts, activeContactId, onSelectContact, currentUser, onLo
       </div>
       
       <div className="search-container">
-        <Search className="search-icon" size={18} />
+        <Search className="search-icon" size={16} />
         <input 
           type="text" 
           className="search-input" 
-          placeholder="Search LAN peers..." 
+          placeholder="Search peers..." 
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
         />
@@ -59,21 +56,23 @@ const Sidebar = ({ contacts, activeContactId, onSelectContact, currentUser, onLo
               {contact.status === 'online' && <div className="status-indicator"></div>}
             </div>
             <div className="contact-info">
-              <div className="contact-name">
-                {contact.name}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
+                <span className="contact-name">{contact.name}</span>
                 {contact.unreadCount !== undefined && contact.unreadCount > 0 && (
                   <span className="unread-badge">{contact.unreadCount}</span>
                 )}
               </div>
-              {contact.lastMessage && (
-                <div className="contact-preview">{contact.lastMessage}</div>
-              )}
+              <div className="contact-preview">
+                {contact.lastMessage || (contact.status === 'online' ? 'Online' : 'Offline')}
+              </div>
             </div>
           </div>
         ))}
+        
         {filteredContacts.length === 0 && (
-          <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-secondary)' }}>
-            No peers found on LAN.
+          <div className="empty-state" style={{ padding: '40px 20px' }}>
+            <MessageSquare size={32} style={{ opacity: 0.2, marginBottom: '12px' }} />
+            <p style={{ fontSize: '0.8rem', opacity: 0.5 }}>No peers discovered yet.</p>
           </div>
         )}
       </div>

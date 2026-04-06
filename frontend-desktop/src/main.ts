@@ -9,6 +9,26 @@ let mainWindow: BrowserWindow | null = null;
 const fileSender = new FileSender();
 const fileReceiver = new FileReceiver();
 
+let rendererReady = false;
+const messageQueue: any[] = [];
+
+function sendToRenderer(channel: string, data: any) {
+  if (rendererReady && mainWindow) {
+    mainWindow.webContents.send(channel, data);
+  } else {
+    messageQueue.push({ channel, data });
+  }
+}
+
+ipcMain.handle('p2p:renderer-ready', () => {
+  rendererReady = true;
+  console.log('[P2P] Renderer ready, flushing', messageQueue.length, 'messages');
+  while (messageQueue.length > 0 && mainWindow) {
+    const { channel, data } = messageQueue.shift();
+    mainWindow.webContents.send(channel, data);
+  }
+});
+
 // ---- Signaling Server for "Backend OFF" Mode ----
 class SignalingServer {
   private server: net.Server | null = null;
@@ -18,9 +38,6 @@ class SignalingServer {
       let buffer = '';
       socket.on('data', (chunk) => {
         buffer += chunk.toString();
-        // Simple protocol: messages are separated by newlines or we try to parse each JSON one by one
-        // For simplicity with the existing client.end() approach, we still buffer,
-        // but we add more logging and better error recovery.
       });
       
       socket.on('error', (err) => {
@@ -31,8 +48,8 @@ class SignalingServer {
         if (!buffer) return;
         try {
           const message = JSON.parse(buffer);
-          mainWindow?.webContents.send('p2p:receive-direct-signaling', {
-            fromIp: socket.remoteAddress?.replace(/^.*:/, ''), // Strip IPv6 prefix if present
+          sendToRenderer('p2p:receive-direct-signaling', {
+            fromIp: socket.remoteAddress?.replace(/^.*:/, ''), 
             payload: message
           });
         } catch (err) {
@@ -81,14 +98,13 @@ function createWindow() {
 
   if (!app.isPackaged) {
     mainWindow.loadURL('http://localhost:5174');
-    mainWindow.webContents.openDevTools();
   } else {
     mainWindow.loadFile(path.join(app.getAppPath(), 'dist/index.html'));
-    mainWindow.webContents.openDevTools();
   }
 
   mainWindow.on('closed', () => {
     mainWindow = null;
+    rendererReady = false;
   });
 }
 
@@ -137,32 +153,38 @@ ipcMain.handle('p2p:select-file', async () => {
   };
 });
 
+// Advanced File Transfer Handlers
 ipcMain.handle('p2p:start-sender', async (_event, { filePath }) => {
-  return fileSender.start(filePath, (progress) => {
-    mainWindow?.webContents.send('p2p:update-progress', progress);
-  });
+  return fileSender.start(filePath, (p) => sendToRenderer('p2p:update-progress', p));
 });
 
 ipcMain.handle('p2p:start-receiver', async (_event, { senderIp, senderPort, fileName, totalBytes, transferId }) => {
   const userDataPath = app.getPath('downloads');
   const savePath = path.join(userDataPath, fileName);
-  return fileReceiver.receive(senderIp, senderPort, savePath, totalBytes, transferId, (progress) => {
-    mainWindow?.webContents.send('p2p:update-progress', progress);
-  });
+  return fileReceiver.receive(senderIp, senderPort, savePath, totalBytes, transferId, (p) => sendToRenderer('p2p:update-progress', p));
+});
+
+ipcMain.handle('p2p:pause-transfer', () => {
+  fileSender.pause();
+  fileReceiver.pause();
+  return true;
+});
+
+ipcMain.handle('p2p:cancel-transfer', () => {
+  fileSender.cancel();
+  fileReceiver.cancel();
+  return true;
 });
 
 import { DiscoveryService } from './shared/discovery.js';
-
 const discoveryService = new DiscoveryService();
 
 app.whenReady().then(async () => {
-  // Always open window first so user sees the UI regardless of service failures
   createWindow();
 
   try { initDb(); } catch (e) { console.warn('[DB] SQLite init failed:', e); }
   try { signalingServer.start(54546); } catch (e) { console.warn('[P2P] Signaling server failed:', e); }
 
-  // Try UDP discovery — gracefully skip if node-machine-id fails
   try {
     const machineIdModule = await import('node-machine-id').catch(() => null);
     const machineIdFn = machineIdModule?.machineIdSync ?? machineIdModule?.default?.machineIdSync;
@@ -178,7 +200,7 @@ app.whenReady().then(async () => {
       identity_key_fingerprint: 'dummy',
       capabilities: 1
     }, (ip, packet) => {
-      mainWindow?.webContents.send('p2p:receive-direct-signaling', {
+      sendToRenderer('p2p:receive-direct-signaling', {
         fromIp: ip,
         payload: {
           type: 'presence',
