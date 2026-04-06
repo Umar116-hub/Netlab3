@@ -59,7 +59,12 @@ const Sidebar = ({ contacts, activeContactId, onSelectContact, currentUser, onLo
               {contact.status === 'online' && <div className="status-indicator"></div>}
             </div>
             <div className="contact-info">
-              <div className="contact-name">{contact.name}</div>
+              <div className="contact-name">
+                {contact.name}
+                {contact.unreadCount !== undefined && contact.unreadCount > 0 && (
+                  <span className="unread-badge">{contact.unreadCount}</span>
+                )}
+              </div>
               {contact.lastMessage && (
                 <div className="contact-preview">{contact.lastMessage}</div>
               )}

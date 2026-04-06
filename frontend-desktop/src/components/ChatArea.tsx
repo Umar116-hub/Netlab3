@@ -1,22 +1,24 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Paperclip, MoreVertical, Shield } from 'lucide-react';
+import { Send, Paperclip, MoreVertical, Shield, File as FileIcon } from 'lucide-react';
 import { useDesktopNet } from '../context/DesktopNetProvider';
-import type { DesktopContact } from '../context/DesktopNetProvider';
-import type { Message } from '../App';
+import type { DesktopContact, DesktopMessage } from '../context/DesktopNetProvider';
 
 interface ChatAreaProps {
   contact: DesktopContact | null;
-  messages: Message[];
+  messages: DesktopMessage[];
   onSendMessage: (text: string) => void;
+  onBack?: () => void;
 }
 
-const ChatArea = ({ contact, messages, onSendMessage }: ChatAreaProps) => {
+const ChatArea = ({ contact, messages, onSendMessage, onBack }: ChatAreaProps) => {
   const [inputText, setInputText] = useState('');
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const { transfers, sendFile, acceptFile } = useDesktopNet();
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const { transfers, sendFile, acceptFile, rejectFile } = useDesktopNet();
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
   }, [messages]);
 
   const handleSend = (e: React.FormEvent) => {
@@ -53,52 +55,20 @@ const ChatArea = ({ contact, messages, onSendMessage }: ChatAreaProps) => {
       <div className="empty-state">
         <Shield className="empty-state-icon" />
         <h3>Native LAN Mode</h3>
-        <p>You are disconnected from the server. P2P discovery is active. Select a peer to transfer files at raw socket speeds.</p>
+        <p>Select a peer to start transferring files and messages at raw socket speeds.</p>
       </div>
     );
   }
 
   return (
     <div className="chat-area">
-      {/* Transfer Overlay */}
-      <div className="transfer-overlay">
-        {transfers.filter(t => t.status !== 'completed' || t.progress < 100).map(transfer => (
-          <div key={transfer.id} className="transfer-item">
-            <div className="transfer-info">
-              <span className="transfer-name">{transfer.name}</span>
-              <span className="transfer-size">{formatFileSize(transfer.size)}</span>
-            </div>
-            
-            <div className="progress-container">
-              <div 
-                className="progress-bar" 
-                style={{ width: `${transfer.progress}%` }}
-              ></div>
-            </div>
-
-            <div className="transfer-actions">
-              {transfer.status === 'pending' && transfer.direction === 'receiving' ? (
-                <>
-                  <button className="transfer-btn reject">Reject</button>
-                  <button 
-                    className="transfer-btn accept"
-                    onClick={() => acceptFile(transfer.id)}
-                  >
-                    Accept
-                  </button>
-                </>
-              ) : (
-                <span className={`transfer-status status-${transfer.status}`}>
-                  {transfer.status === 'active' ? `${Math.round(transfer.progress)}%` : transfer.status}
-                </span>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
-
       <div className="chat-header">
         <div className="chat-header-info">
+          {onBack && (
+            <button className="icon-btn mobile-back-btn" onClick={onBack}>
+              <MoreVertical size={24} />
+            </button>
+          )}
           <div className="avatar">
             {contact.name.charAt(0).toUpperCase()}
             {contact.status === 'online' && <div className="status-indicator"></div>}
@@ -109,23 +79,17 @@ const ChatArea = ({ contact, messages, onSendMessage }: ChatAreaProps) => {
           </div>
         </div>
         <div className="header-actions">
-          <button 
-            className="icon-btn" 
-            title="Send File Native TCP"
-            onClick={handleFileClick}
-          >
-            <Paperclip size={20} />
-          </button>
-          <button className="icon-btn" title="More Options"><MoreVertical size={20} /></button>
+           <button className="icon-btn" onClick={handleFileClick} title="Send File"><Paperclip size={20} /></button>
+           <button className="icon-btn"><MoreVertical size={20} /></button>
         </div>
       </div>
 
-      <div className="messages-container">
+      <div className="messages-container" ref={scrollRef}>
         {messages.map((msg) => {
           const isMe = msg.senderId === 'me';
           return (
             <div key={msg.id} className={`message-wrapper ${isMe ? 'sent' : 'received'}`}>
-              <div>
+              <div style={{ maxWidth: '100%' }}>
                 <div className="message-bubble">
                   {msg.text}
                 </div>
@@ -134,15 +98,45 @@ const ChatArea = ({ contact, messages, onSendMessage }: ChatAreaProps) => {
             </div>
           );
         })}
-        <div ref={messagesEndRef} />
       </div>
+
+      {/* Transfer Overlay (Modern Style) */}
+      {transfers.length > 0 && (
+        <div className="transfer-overlay">
+          {transfers.filter(t => t.status !== 'completed' && t.status !== 'error').map(t => (
+            <div key={t.id} className="transfer-card">
+              <div className="transfer-card-header">
+                <FileIcon size={16} />
+                <span className="transfer-card-name">{t.name}</span>
+                <span className="transfer-card-size">{formatFileSize(t.size)}</span>
+              </div>
+              <div className="transfer-card-progress">
+                <div className="progress-bar" style={{ width: `${t.progress}%` }}></div>
+              </div>
+              <div className="transfer-card-footer">
+                {t.status === 'pending' && t.direction === 'receiving' ? (
+                  <div className="transfer-actions">
+                    <button onClick={() => rejectFile(t.id)} className="transfer-btn reject">Reject</button>
+                    <button onClick={() => acceptFile(t.id)} className="transfer-btn accept">Accept</button>
+                  </div>
+                ) : (
+                  <div className="transfer-status-row">
+                    <span>{t.direction === 'sending' ? 'Sending...' : 'Receiving...'}</span>
+                    <span>{Math.round(t.progress)}%</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="chat-input-container">
         <button 
           className="icon-btn" 
-          style={{ padding: '12px' }} 
-          title="Attach File Native TCP"
           onClick={handleFileClick}
+          title="Attach File"
+          style={{ padding: '12px' }}
         >
           <Paperclip size={24} />
         </button>
@@ -151,7 +145,7 @@ const ChatArea = ({ contact, messages, onSendMessage }: ChatAreaProps) => {
           <div className="input-wrapper" style={{ flex: 1 }}>
             <textarea 
               className="chat-input" 
-              placeholder="Type a secure message over TCP..." 
+              placeholder="Type a secure message..." 
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
               onKeyDown={handleKeyDown}
@@ -159,7 +153,7 @@ const ChatArea = ({ contact, messages, onSendMessage }: ChatAreaProps) => {
             />
           </div>
           <button type="submit" className="send-btn" disabled={!inputText.trim()}>
-            <Send size={20} style={{ marginLeft: '4px' }} />
+            <Send size={20} style={{ transform: 'translate(-1px, 1px)' }} />
           </button>
         </form>
       </div>

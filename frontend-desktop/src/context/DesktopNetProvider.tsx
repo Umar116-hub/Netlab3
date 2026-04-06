@@ -4,6 +4,13 @@ import type { ReactNode } from 'react';
 // Using window.require because we configured contextIsolation: false in Electron
 const ipcRenderer = (window as any).require ? (window as any).require('electron').ipcRenderer : null;
 
+export interface DesktopMessage {
+  id: string;
+  senderId: string;
+  text: string;
+  timestamp: string;
+}
+
 export interface DesktopContact {
   id: string;
   name: string;
@@ -11,6 +18,7 @@ export interface DesktopContact {
   status: 'online' | 'offline';
   lastSeen: number;
   lastMessage?: string;
+  unreadCount?: number;
 }
 
 export interface Transfer {
@@ -28,11 +36,13 @@ interface DesktopNetContextType {
   myId: string;
   myName: string;
   contacts: DesktopContact[];
+  messages: Record<string, DesktopMessage[]>;
   transfers: Transfer[];
   sendMessage: (toId: string, text: string) => Promise<boolean>;
   sendFile: (toId: string) => Promise<void>;
   acceptFile: (transferId: string) => void;
   rejectFile: (transferId: string) => void;
+  clearUnread: (contactId: string) => void;
 }
 
 const DesktopNetContext = createContext<DesktopNetContextType | null>(null);
@@ -41,6 +51,7 @@ export const DesktopNetProvider = ({ children }: { children: ReactNode }) => {
   const [myId] = useState(() => localStorage.getItem('desktop_identity') || `mac-${Math.random().toString(36).substring(7)}`);
   const [myName, _setMyName] = useState(() => localStorage.getItem('desktop_name') || `User-${Math.floor(Math.random() * 1000)}`);
   const [contacts, setContacts] = useState<DesktopContact[]>([]);
+  const [messages, setMessages] = useState<Record<string, DesktopMessage[]>>({});
   const [transfers, setTransfers] = useState<Transfer[]>([]);
 
   // Storing initial state permanently
@@ -68,8 +79,27 @@ export const DesktopNetProvider = ({ children }: { children: ReactNode }) => {
           if (existing) {
             return prev.map(c => c.id === payload.id ? { ...c, ip: fromIp, status: 'online', lastSeen: Date.now(), name: payload.name || c.name } : c);
           }
-          return [...prev, { id: payload.id, name: payload.name || 'Unknown', ip: fromIp, status: 'online', lastSeen: Date.now() }];
+          return [...prev, { id: payload.id, name: payload.name || 'Unknown', ip: fromIp, status: 'online', lastSeen: Date.now(), unreadCount: 0 }];
         });
+      } else if (payload.type === 'chat') {
+        const senderId = payload.from;
+        const newMsg: DesktopMessage = {
+          id: Date.now().toString(),
+          senderId,
+          text: payload.text,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        };
+        
+        setMessages(prev => ({
+          ...prev,
+          [senderId]: [...(prev[senderId] ?? []), newMsg],
+        }));
+
+        setContacts(prev => prev.map(c => 
+          c.id === senderId 
+            ? { ...c, lastMessage: payload.text, unreadCount: (c.unreadCount ?? 0) + 1 } 
+            : c
+        ));
       } else if (payload.type === 'file_offer') {
         setTransfers(prev => [...prev, {
           id: payload.transferId,
@@ -108,12 +138,29 @@ export const DesktopNetProvider = ({ children }: { children: ReactNode }) => {
     // Send direct TCP message via main.ts
     const payload = { type: 'chat', from: myId, text };
     try {
-      await ipcRenderer.invoke('p2p:send-direct-signaling', { ip: contact.ip, port: 54546, payload });
-      return true;
+      const ok = await ipcRenderer.invoke('p2p:send-direct-signaling', { ip: contact.ip, port: 54546, payload });
+      if (ok) {
+        const newMsg: DesktopMessage = {
+          id: Date.now().toString(),
+          senderId: 'me',
+          text,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        };
+        setMessages(prev => ({
+          ...prev,
+          [toId]: [...(prev[toId] ?? []), newMsg],
+        }));
+        setContacts(prev => prev.map(c => c.id === toId ? { ...c, lastMessage: text } : c));
+      }
+      return ok;
     } catch (e) {
       console.error("Failed to send direct message", e);
       return false;
     }
+  };
+
+  const clearUnread = (contactId: string) => {
+    setContacts(prev => prev.map(c => c.id === contactId ? { ...c, unreadCount: 0 } : c));
   };
 
   const sendFile = async (toId: string) => {
@@ -160,7 +207,9 @@ export const DesktopNetProvider = ({ children }: { children: ReactNode }) => {
   const rejectFile = (_transferId: string) => {};
 
   return (
-    <DesktopNetContext.Provider value={{ myId, myName, contacts, transfers, sendMessage, sendFile, acceptFile, rejectFile }}>
+    <DesktopNetContext.Provider value={{ 
+      myId, myName, contacts, messages, transfers, sendMessage, sendFile, acceptFile, rejectFile, clearUnread 
+    }}>
       {children}
     </DesktopNetContext.Provider>
   );

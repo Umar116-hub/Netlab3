@@ -15,22 +15,40 @@ class SignalingServer {
 
   start(port: number) {
     this.server = net.createServer((socket) => {
-      let data = '';
+      let buffer = '';
       socket.on('data', (chunk) => {
-        data += chunk.toString();
+        buffer += chunk.toString();
+        // Simple protocol: messages are separated by newlines or we try to parse each JSON one by one
+        // For simplicity with the existing client.end() approach, we still buffer,
+        // but we add more logging and better error recovery.
       });
+      
+      socket.on('error', (err) => {
+        console.error('[P2P] Signaling socket error:', err);
+      });
+
       socket.on('end', () => {
+        if (!buffer) return;
         try {
-          const message = JSON.parse(data);
+          const message = JSON.parse(buffer);
           mainWindow?.webContents.send('p2p:receive-direct-signaling', {
-            fromIp: socket.remoteAddress,
+            fromIp: socket.remoteAddress?.replace(/^.*:/, ''), // Strip IPv6 prefix if present
             payload: message
           });
         } catch (err) {
-          console.error('Failed to parse direct signaling message:', err);
+          console.error('[P2P] Failed to parse signaling message:', err, 'Buffer:', buffer);
         }
       });
     });
+
+    this.server.on('error', (err: any) => {
+      if (err.code === 'EADDRINUSE') {
+        console.warn(`[P2P] Port ${port} in use, P2P signaling might fail.`);
+      } else {
+        console.error('[P2P] Signaling server error:', err);
+      }
+    });
+
     this.server.listen(port, '0.0.0.0', () => {
       console.log(`[P2P] Signaling server listening on port ${port}`);
     });
