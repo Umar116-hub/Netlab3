@@ -2,7 +2,6 @@ import { app, BrowserWindow, ipcMain, dialog } from 'electron';
 import * as path from 'path';
 import os from 'os';
 import net from 'net';
-import { initDb, saveMessage, getMessages, saveContact, getContacts } from './db.js';
 import { FileSender, FileReceiver } from './shared/transfer.js';
 
 let mainWindow: BrowserWindow | null = null;
@@ -19,15 +18,6 @@ function sendToRenderer(channel: string, data: any) {
     messageQueue.push({ channel, data });
   }
 }
-
-ipcMain.handle('p2p:renderer-ready', () => {
-  rendererReady = true;
-  console.log('[P2P] Renderer ready, flushing', messageQueue.length, 'messages');
-  while (messageQueue.length > 0 && mainWindow) {
-    const { channel, data } = messageQueue.shift();
-    mainWindow.webContents.send(channel, data);
-  }
-});
 
 // ---- Signaling Server for "Backend OFF" Mode ----
 class SignalingServer {
@@ -108,124 +98,119 @@ function createWindow() {
   });
 }
 
-// DB IPC Handlers
-ipcMain.handle('db:save-message', (_event, { id, contactId, senderId, text }) => {
-  return saveMessage(id, contactId, senderId, text);
-});
-
-ipcMain.handle('db:get-messages', (_event, { contactId }) => {
-  return getMessages(contactId);
-});
-
-ipcMain.handle('db:save-contact', (_event, { id, name, status }) => {
-  return saveContact(id, name, status);
-});
-
-ipcMain.handle('db:get-contacts', () => {
-  return getContacts();
-});
-
-// P2P IPC Handlers
-ipcMain.handle('p2p:get-lan-ip', () => getLanIp());
-ipcMain.handle('p2p:get-my-info', async () => {
-    const machineIdModule = await import('node-machine-id').catch(() => null);
-    const machineIdFn = machineIdModule?.machineIdSync ?? machineIdModule?.default?.machineIdSync;
-    const myId = machineIdFn ? machineIdFn() : os.hostname();
-    return { id: myId, name: os.hostname() };
-});
-
-ipcMain.handle('p2p:send-direct-signaling', async (_event, { ip, port, payload }) => {
-  return new Promise((resolve, reject) => {
-    const client = net.createConnection({ host: ip, port: port }, () => {
-      client.write(JSON.stringify(payload));
-      client.end();
-      resolve(true);
-    });
-    client.on('error', reject);
-  });
-});
-
-ipcMain.handle('p2p:select-file', async () => {
-  const result = await dialog.showOpenDialog({
-    properties: ['openFile']
-  });
-  if (result.canceled || result.filePaths.length === 0) return null;
-  const filePath = result.filePaths[0];
-  const stats = await import('fs/promises').then(fs => fs.stat(filePath));
-  return {
-    path: filePath,
-    name: path.basename(filePath),
-    size: stats.size
-  };
-});
-
-// Advanced File Transfer Handlers
-ipcMain.handle('p2p:start-sender', async (_event, { filePath }) => {
-  return fileSender.start(filePath, (p) => sendToRenderer('p2p:update-progress', p));
-});
-
-ipcMain.handle('p2p:start-receiver', async (_event, { senderIp, senderPort, fileName, totalBytes, transferId }) => {
-  const userDataPath = app.getPath('downloads');
-  const savePath = path.join(userDataPath, fileName);
-  return fileReceiver.receive(senderIp, senderPort, savePath, totalBytes, transferId, (p) => sendToRenderer('p2p:update-progress', p));
-});
-
-ipcMain.handle('p2p:pause-transfer', () => {
-  fileSender.pause();
-  fileReceiver.pause();
-  return true;
-});
-
-ipcMain.handle('p2p:cancel-transfer', () => {
-  fileSender.cancel();
-  fileReceiver.cancel();
-  return true;
-});
-
-import { DiscoveryService } from './shared/discovery.js';
-const discoveryService = new DiscoveryService();
-
+// STARTUP SEQUENCE: Robust against DB failures
 app.whenReady().then(async () => {
+  // 1. REGISTER CORE P2P HANDLERS FIRST (Before any DB imports that might crash)
+  ipcMain.handle('p2p:get-my-info', async () => {
+    try {
+      const machineIdModule = await import('node-machine-id').catch(() => null);
+      const machineIdFn = machineIdModule?.machineIdSync ?? machineIdModule?.default?.machineIdSync;
+      const myId = machineIdFn ? machineIdFn() : os.hostname();
+      return { id: myId, name: os.hostname() };
+    } catch (e) {
+      return { id: os.hostname(), name: os.hostname() };
+    }
+  });
+
+  ipcMain.handle('p2p:renderer-ready', () => {
+    rendererReady = true;
+    console.log('[P2P] Renderer ready, flushing', messageQueue.length, 'messages');
+    while (messageQueue.length > 0 && mainWindow) {
+      const { channel, data } = messageQueue.shift();
+      mainWindow.webContents.send(channel, data);
+    }
+  });
+
+  ipcMain.handle('p2p:get-lan-ip', () => getLanIp());
+
+  ipcMain.handle('p2p:send-direct-signaling', async (_event, { ip, port, payload }) => {
+    return new Promise((resolve, reject) => {
+      const client = net.createConnection({ host: ip, port: port }, () => {
+        client.write(JSON.stringify(payload));
+        client.end();
+        resolve(true);
+      });
+      client.on('error', reject);
+    });
+  });
+
+  ipcMain.handle('p2p:select-file', async () => {
+    const result = await dialog.showOpenDialog({ properties: ['openFile'] });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    const filePath = result.filePaths[0];
+    const stats = await import('fs/promises').then(fs => fs.stat(filePath));
+    return { path: filePath, name: path.basename(filePath), size: stats.size };
+  });
+
+  ipcMain.handle('p2p:start-sender', async (_event, { filePath }) => {
+    return fileSender.start(filePath, (p) => sendToRenderer('p2p:update-progress', p));
+  });
+
+  ipcMain.handle('p2p:start-receiver', async (_event, { senderIp, senderPort, fileName, totalBytes, transferId }) => {
+    const userDataPath = app.getPath('downloads');
+    const savePath = path.join(userDataPath, fileName);
+    return fileReceiver.receive(senderIp, senderPort, savePath, totalBytes, transferId, (p) => sendToRenderer('p2p:update-progress', p));
+  });
+
+  ipcMain.handle('p2p:pause-transfer', () => {
+    fileSender.pause();
+    fileReceiver.pause();
+    return true;
+  });
+
+  ipcMain.handle('p2p:cancel-transfer', () => {
+    fileSender.cancel();
+    fileReceiver.cancel();
+    return true;
+  });
+
+  // 2. CREATE WINDOW
   createWindow();
 
-  try { initDb(); } catch (e) { console.warn('[DB] SQLite init failed:', e); }
+  // 3. LAZY LOAD DB & START SERVICES
+  try {
+     const dbModule = await import('./db.js').catch(() => null);
+     if (dbModule) {
+        dbModule.initDb();
+        ipcMain.handle('db:save-message', (_e, { id, contactId, senderId, text }) => dbModule.saveMessage(id, contactId, senderId, text));
+        ipcMain.handle('db:get-messages', (_e, { contactId }) => dbModule.getMessages(contactId));
+        ipcMain.handle('db:save-contact', (_e, { id, name, status }) => dbModule.saveContact(id, name, status));
+        ipcMain.handle('db:get-contacts', () => dbModule.getContacts());
+     }
+  } catch (e) {
+     console.warn('[DB] SQLite failed to load (Node v24 issues?). App will run in Memory-Only Mode.', e);
+  }
+
   try { signalingServer.start(54546); } catch (e) { console.warn('[P2P] Signaling server failed:', e); }
 
   try {
+    const { DiscoveryService } = await import('./shared/discovery.js');
+    const discoveryService = new DiscoveryService();
     const machineIdModule = await import('node-machine-id').catch(() => null);
     const machineIdFn = machineIdModule?.machineIdSync ?? machineIdModule?.default?.machineIdSync;
-    const myDeviceId = machineIdFn ? machineIdFn() : os.hostname();
-    const myName = os.hostname();
-
+    const myId = machineIdFn ? machineIdFn() : os.hostname();
+    
     discoveryService.start({
       protocol_version: 1,
-      device_id: myDeviceId,
+      device_id: myId,
       account_id: 'local',
-      display_name: myName,
+      display_name: os.hostname(),
       p2p_tcp_port: 54546,
       identity_key_fingerprint: 'dummy',
       capabilities: 1
     }, (ip, packet) => {
       sendToRenderer('p2p:receive-direct-signaling', {
         fromIp: ip,
-        payload: {
-          type: 'presence',
-          id: packet.device_id,
-          name: packet.display_name
-        }
+        payload: { type: 'presence', id: packet.device_id, name: packet.display_name }
       });
     });
   } catch (e) { console.warn('[Discovery] UDP discovery failed:', e); }
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-    }
+    if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
+  if (process.platform !== 'darwin') app.quit();
 });
