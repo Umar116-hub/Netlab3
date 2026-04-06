@@ -86,7 +86,6 @@ const ChatArea = ({ contact, messages, onSendMessage, onBack }: ChatAreaProps) =
           </div>
         </div>
         <div className="header-actions">
-           <button className="icon-btn" onClick={() => sendFile(contact.id)} title="Send File"><Paperclip size={20} /></button>
            <button className="icon-btn"><MoreVertical size={20} /></button>
         </div>
       </div>
@@ -113,41 +112,37 @@ const ChatArea = ({ contact, messages, onSendMessage, onBack }: ChatAreaProps) =
         }, [])}
       </div>
 
-      {/* Transfer Overlay */}
+      {/* Transfer Panel - High Fidelity & Non-Overlapping */}
       {transfers.length > 0 && (
-        <div className="transfer-overlay">
-          {transfers.filter(t => t.status !== 'completed' && t.status !== 'cancelled').map(t => (
+        <div className="transfer-panel">
+          {transfers.filter(t => t.status !== 'cancelled').map(t => (
             <div key={t.id} className="transfer-card">
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <FileIcon size={18} className="text-secondary" />
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: '0.85rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.name}</div>
-                  <div style={{ fontSize: '0.7rem', opacity: 0.7 }}>{formatFileSize(t.size)} • {t.direction}</div>
+              <div className="transfer-card-header">
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                  <FileIcon size={14} className="text-secondary" />
+                  <span className="transfer-name">{t.name}</span>
                 </div>
                 <div style={{ display: 'flex', gap: '4px' }}>
                   {t.status === 'pending' && t.direction === 'receiving' && (
-                    <>
-                      <button onClick={() => acceptFile(t.id)} className="transfer-btn accept" title="Accept"><Download size={14} /></button>
-                      <button onClick={() => rejectFile(t.id)} className="transfer-btn reject" title="Reject"><X size={14} /></button>
-                    </>
+                    <button onClick={() => acceptFile(t.id)} className="transfer-btn accept">Accept</button>
                   )}
                   {t.status === 'active' && (
-                    <button onClick={() => pauseTransfer(t.id)} className="icon-btn small" title="Pause"><Pause size={14} /></button>
+                    <button onClick={() => pauseTransfer(t.id)} className="icon-btn small"><Pause size={12} /></button>
                   )}
                   {t.status === 'paused' && (
-                    <button onClick={() => resumeTransfer(t.id)} className="icon-btn small" title="Resume"><Play size={14} /></button>
+                    <button onClick={() => resumeTransfer(t.id)} className="icon-btn small"><Play size={12} /></button>
                   )}
-                  {(t.status === 'active' || t.status === 'paused') && (
-                    <button onClick={() => cancelTransfer(t.id)} className="icon-btn small" title="Cancel"><X size={14} /></button>
+                  {t.status !== 'completed' && (
+                    <button onClick={() => cancelTransfer(t.id)} className="icon-btn small"><X size={12} /></button>
                   )}
                 </div>
               </div>
               
               <div className="progress-bar">
-                <div className="progress-fill" style={{ width: `${t.progress}%` }}></div>
+                <div className="progress-fill" style={{ width: `${t.progress}%`, background: t.status === 'completed' ? 'var(--success)' : 'var(--accent-primary)' }}></div>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '4px', fontSize: '0.7rem', opacity: 0.8 }}>
-                <span>{t.status}</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.65rem', opacity: 0.7 }}>
+                <span>{t.status.toUpperCase()}</span>
                 <span>{Math.round(t.progress)}%</span>
               </div>
             </div>
