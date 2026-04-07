@@ -75,7 +75,7 @@ export class FileSender {
      const readStream = fs.createReadStream(this.filePath, { 
        start, 
        end: end - 1, 
-       highWaterMark: 512 * 1024 // 512KB Stable Buffer
+       highWaterMark: 2 * 1024 * 1024 // 2MB Apex Buffer
      });
      this.activeStreams.add(readStream);
 
@@ -143,7 +143,7 @@ export class FileReceiver {
   private lastReportTime = 0;
   private lastReportBytes = 0;
   private inFlightWrites = 0;
-  private streamCount = 4; // Stable "Sweet Spot"
+  private streamCount = 8; // Apex Concurrency: 8 Pipes
   private streamsEnded = 0;
 
   receive(
@@ -165,7 +165,7 @@ export class FileReceiver {
 
     return new Promise((resolve, reject) => {
       try {
-        this.fileDescriptor = fs.openSync(this.savePath, 'w');
+        this.fileDescriptor = fs.openSync(this.savePath, 'w', 0o666);
       } catch (e: any) {
         return reject(e);
       }
@@ -192,30 +192,31 @@ export class FileReceiver {
           socket.write(header);
         });
 
-        let streamBuffer = Buffer.allocUnsafe(1024 * 1024); // 1MB batch
+        let streamBuffer = Buffer.allocUnsafe(2 * 1024 * 1024); // 2MB Apex Jumbo Block
         let streamBufferLen = 0;
         let currentWriteOffset = start;
 
         const flushStreamBuffer = () => {
            if (this.fileDescriptor === null || streamBufferLen === 0) return;
            
-           // CLONE BUFFER: This prevents the async race condition!
-           // Each write now has its own isolated memory space.
-           const dataToWrite = Buffer.allocUnsafe(streamBufferLen);
-           streamBuffer.copy(dataToWrite, 0, 0, streamBufferLen);
-           
+           // ZERO-COPY SWAP TECHNIQUE:
+           // We pass the entire buffer to the SSD driver and swap it for a new one.
+           // This prevents high-frequency duplication and massively boosts speed.
+           const dataToWrite = streamBuffer.subarray(0, streamBufferLen);
            const fd = this.fileDescriptor;
            const pos = currentWriteOffset;
            
            this.inFlightWrites++;
            fs.write(fd, dataToWrite, 0, dataToWrite.length, pos, (err) => {
               this.inFlightWrites--;
-              if (err) console.error('[Receiver] Async write error:', err);
+              if (err) console.error('[Receiver] Apex write error:', err);
               if (this.streamsEnded >= this.streamCount && this.inFlightWrites === 0) {
                  this.finish(onProgress, resolve);
               }
            });
 
+           // Allocate NEW for next batch (Swap)
+           streamBuffer = Buffer.allocUnsafe(2 * 1024 * 1024);
            currentWriteOffset += streamBufferLen;
            streamBufferLen = 0;
         };
@@ -229,10 +230,10 @@ export class FileReceiver {
           } else {
              flushStreamBuffer();
              if (chunk.length > streamBuffer.length) {
-                // Direct async write for jumbo chunks
+                // Direct async write for Hyper-Jumbo chunks
                 const fd = this.fileDescriptor;
                 const pos = currentWriteOffset;
-                const directChunk = Buffer.from(chunk); // Must copy to keep memory safe
+                const directChunk = Buffer.from(chunk); // Safety copy for high-speed Async
                 this.inFlightWrites++;
                 fs.write(fd, directChunk, 0, directChunk.length, pos, (err) => {
                    this.inFlightWrites--;
