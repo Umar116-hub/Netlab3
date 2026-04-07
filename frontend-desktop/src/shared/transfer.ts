@@ -37,15 +37,19 @@ export class FileSender {
       this.server = net.createServer((socket) => {
         console.log('[Transfer] Receiver connected');
         this.currentSocket = socket;
+        this.currentSocket.setNoDelay(true);
         
-        // Start from where we left off
-        this.currentReadStream = fs.createReadStream(this.filePath, { start: this.bytesSent });
+        // Start from where we left off with Turbo HighWaterMark (512KB)
+        this.currentReadStream = fs.createReadStream(this.filePath, { 
+            start: this.bytesSent,
+            highWaterMark: 512 * 1024
+        });
 
         this.currentReadStream.on('data', (chunk) => {
           this.bytesSent += chunk.length;
           
           const now = Date.now();
-          if (now - this.lastReportTime >= 800) { // Throttle updates for UI stability
+          if (now - this.lastReportTime >= 1500) { // Optimized reporting interval
             const speed = (this.bytesSent - this.lastReportBytes) / ((now - this.lastReportTime) / 1000);
             const remaining = (this.totalBytes - this.bytesSent) / speed;
             
@@ -161,8 +165,13 @@ export class FileReceiver {
 
     return new Promise((resolve, reject) => {
       this.socket = new net.Socket();
-      // 'a' flag for appending on resume
-      this.writeStream = fs.createWriteStream(this.savePath, { flags: this.bytesReceived > 0 ? 'a' : 'w' });
+      this.socket.setNoDelay(true);
+      
+      // 'a' flag for appending on resume with Turbo HighWaterMark (512KB)
+      this.writeStream = fs.createWriteStream(this.savePath, { 
+          flags: this.bytesReceived > 0 ? 'a' : 'w',
+          highWaterMark: 512 * 1024
+      });
 
       this.socket.connect(this.senderPort, this.senderIp, () => {
         console.log(`[Transfer] Connected to sender at ${this.senderIp}:${this.senderPort}`);
@@ -175,7 +184,7 @@ export class FileReceiver {
         this.bytesReceived += chunk.length;
         
         const now = Date.now();
-        if (now - this.lastReportTime >= 800) {
+        if (now - this.lastReportTime >= 1500) { // Optimized reporting interval
           const speed = (this.bytesReceived - this.lastReportBytes) / ((now - this.lastReportTime) / 1000);
           const remaining = (this.totalBytes - this.bytesReceived) / speed;
           
