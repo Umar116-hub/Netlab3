@@ -145,8 +145,8 @@ app.whenReady().then(async () => {
         });
         event.reply('p2p:save-path-selected', result.canceled ? null : result.filePath);
     });
-    ipcMain.handle('p2p:start-sender', async (_event, { filePath }) => {
-        return fileSender.start(filePath, (p) => sendToRenderer('p2p:update-progress', p));
+    ipcMain.handle('p2p:start-sender', async (_event, { filePath, transferId }) => {
+        return fileSender.start(filePath, transferId, (p) => sendToRenderer('p2p:update-progress', p));
     });
     ipcMain.handle('p2p:start-receiver', async (_event, { senderIp, senderPort, savePath, totalBytes, transferId }) => {
         return fileReceiver.receive(senderIp, senderPort, savePath, totalBytes, transferId, (p) => sendToRenderer('p2p:update-progress', p));

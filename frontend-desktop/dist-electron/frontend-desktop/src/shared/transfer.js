@@ -11,11 +11,11 @@ export class FileSender {
     startTime = 0;
     lastReportTime = 0;
     lastReportBytes = 0;
-    start(filePath, onProgress) {
+    start(filePath, transferId, onProgress) {
         this.filePath = filePath;
         const stats = fs.statSync(filePath);
         this.totalBytes = stats.size;
-        this.transferId = `tx-${Math.random().toString(36).substring(7)}`;
+        this.transferId = transferId;
         this.bytesSent = 0;
         this.startTime = Date.now();
         this.lastReportTime = this.startTime;

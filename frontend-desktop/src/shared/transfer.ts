@@ -23,11 +23,11 @@ export class FileSender {
   private lastReportTime = 0;
   private lastReportBytes = 0;
 
-  start(filePath: string, onProgress: (p: TransferProgress) => void): Promise<{ port: number }> {
+  start(filePath: string, transferId: string, onProgress: (p: TransferProgress) => void): Promise<{ port: number }> {
     this.filePath = filePath;
     const stats = fs.statSync(filePath);
     this.totalBytes = stats.size;
-    this.transferId = `tx-${Math.random().toString(36).substring(7)}`;
+    this.transferId = transferId;
     this.bytesSent = 0;
     this.startTime = Date.now();
     this.lastReportTime = this.startTime;

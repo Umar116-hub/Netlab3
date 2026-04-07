@@ -229,7 +229,7 @@ export const DesktopNetProvider = ({ children }: { children: ReactNode }) => {
         progress: 0, status: 'pending', direction: 'sending', ip: contact.ip
      }]);
 
-     const portInfo = await ipcRenderer.invoke('p2p:start-sender', { filePath: fileObj.path });
+     const portInfo = await ipcRenderer.invoke('p2p:start-sender', { filePath: fileObj.path, transferId });
      
      if (portInfo && portInfo.port) {
         await ipcRenderer.invoke('p2p:send-direct-signaling', {
