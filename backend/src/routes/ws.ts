@@ -110,7 +110,11 @@ export default async function wsRoutes(fastify: FastifyInstance) {
     clientSet.add(clientInfo);
 
     console.log(`[WS] Client authenticated: ${connectionId} (User: ${session.username || 'unknown'}). Total sockets for user: ${clientSet.size}`);
-    socket.send(JSON.stringify({ type: 'authenticated', accountId: session.account_id }));
+    socket.send(JSON.stringify({ 
+      type: 'authenticated', 
+      accountId: session.account_id,
+      your_ip: req.ip // Crucial for client-to-client P2P on LAN
+    }));
     
     // Only broadcast ONLINE if this is the first connection for this user
     if (wasOffline) {

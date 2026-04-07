@@ -86,6 +86,7 @@ export function useAuth() {
 interface WebSocketContextValue {
   socket: WebSocket | null;
   isConnected: boolean;
+  myIp: string | null;
   onlineUserIds: Set<string>;
   setOnlineUserIds: React.Dispatch<React.SetStateAction<Set<string>>>;
   send: (payload: object) => void;
@@ -98,6 +99,7 @@ const WebSocketContext = createContext<WebSocketContextValue | null>(null);
 export function WebSocketProvider({ children }: { children: ReactNode }) {
   const { token } = useAuth();
   const [isConnected, setIsConnected] = useState(false);
+  const [myIp, setMyIp] = useState<string | null>(null);
   const [onlineUserIds, setOnlineUserIds] = useState<Set<string>>(new Set());
   const socketRef = useRef<WebSocket | null>(null);
   const listeners = useRef<Set<(msg: any) => void>>(new Set());
@@ -170,7 +172,8 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
         console.log('[WS] Message received:', msg.type, msg);
         
         if (msg.type === 'authenticated') {
-          console.log('%c[WS] MY PEER ID: ' + msg.accountId, 'background: #222; color: #bada55; font-size: 1.2em; font-weight: bold;');
+          console.log('%c[WS] MY PEER ID: ' + msg.accountId + ' | IP: ' + msg.your_ip, 'background: #222; color: #bada55; font-size: 1.2em; font-weight: bold;');
+          if (msg.your_ip) setMyIp(msg.your_ip);
         }
         
         if (msg.type === 'presence_update') {
@@ -238,7 +241,7 @@ export function WebSocketProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <WebSocketContext.Provider value={{ socket: socketRef.current, isConnected, onlineUserIds, setOnlineUserIds, send, addListener, removeListener }}>
+    <WebSocketContext.Provider value={{ socket: socketRef.current, isConnected, myIp, onlineUserIds, setOnlineUserIds, send, addListener, removeListener }}>
       {children}
     </WebSocketContext.Provider>
   );

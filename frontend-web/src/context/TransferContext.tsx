@@ -36,7 +36,7 @@ const ICE_SERVERS = {
 };
 
 export function TransferProvider({ children }: { children: ReactNode }) {
-  const { send, addListener, removeListener } = useWebSocket();
+  const { send, addListener, removeListener, myIp } = useWebSocket();
   const [transfers, setTransfers] = useState<ActiveTransfer[]>([]);
 
   // Use refs for mutable maps — they survive re-renders without causing effect re-runs
@@ -212,9 +212,9 @@ export function TransferProvider({ children }: { children: ReactNode }) {
       const ip = parts[4];
       sendRef.current({ type: 'webrtc_signaling', recipient_id: peerId, payload: { type: 'candidate', payload: e.candidate } });
 
-      // mDNS bypass
-      const host = window.location.hostname;
-      if (ip.endsWith('.local') && /^(\d{1,3}\.){3}\d{1,3}$/.test(host)) {
+      // mDNS bypass - Prioritize detected IP from server, then fallback to current location
+      const host = myIp || window.location.hostname;
+      if (ip.endsWith('.local') && (myIp || /^(\d{1,3}\.){3}\d{1,3}$/.test(host))) {
         sendRef.current({
           type: 'webrtc_signaling', recipient_id: peerId,
           payload: { type: 'candidate', payload: { candidate: e.candidate.candidate.replace(ip, host), sdpMid: e.candidate.sdpMid, sdpMLineIndex: e.candidate.sdpMLineIndex } },
