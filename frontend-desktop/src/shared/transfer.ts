@@ -206,7 +206,7 @@ export class FileReceiver {
            const pos = currentWriteOffset;
            
            this.inFlightWrites++;
-           fs.write(fd, dataToWrite, 0, dataToWrite.length, pos, (err) => {
+           fs.write(fd, dataToWrite, 0, dataToWrite.length, pos, (_err) => {
               this.inFlightWrites--;
               if (this.streamsEnded >= this.streamCount && this.inFlightWrites === 0) {
                  this.finish(onProgress, resolve);
@@ -230,7 +230,7 @@ export class FileReceiver {
                 const pos = currentWriteOffset;
                 const directChunk = Buffer.from(chunk);
                 this.inFlightWrites++;
-                fs.write(fd, directChunk, 0, directChunk.length, pos, (err) => {
+                fs.write(fd, directChunk, 0, directChunk.length, pos, (_err) => {
                    this.inFlightWrites--;
                    if (this.streamsEnded >= this.streamCount && this.inFlightWrites === 0) {
                       this.finish(onProgress, resolve);
