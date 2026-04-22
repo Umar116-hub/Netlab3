@@ -267,6 +267,7 @@ export class FileReceiver {
         });
 
         socket.on('error', (err) => {
+          console.error(`[Receiver] Socket error for stream ${i}:`, err);
           this.pause();
           reject(err);
         });

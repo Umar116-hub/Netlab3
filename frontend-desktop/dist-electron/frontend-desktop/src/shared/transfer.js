@@ -26,31 +26,21 @@ export class FileSender {
                 this.activeSockets.add(socket);
                 let handshakeBuffer = Buffer.alloc(0);
                 const onData = (chunk) => {
-                    const terminatorIndex = chunk.indexOf('\n');
-                    if (terminatorIndex !== -1) {
-                        const fullMsg = Buffer.concat([handshakeBuffer, chunk.slice(0, terminatorIndex)]).toString();
-                        try {
-                            const { start, end } = JSON.parse(fullMsg);
-                            // SUCCESS: Remove listener and start streaming
-                            socket.off('data', onData);
-                            this.streamRange(socket, start, end, onProgress);
-                        }
-                        catch (e) {
-                            console.error('[Sender] Handshake parse error', e);
-                        }
-                    }
-                    else if (handshakeBuffer.length < 2048) {
-                        handshakeBuffer = Buffer.concat([handshakeBuffer, chunk]);
+                    handshakeBuffer = Buffer.concat([handshakeBuffer, chunk]);
+                    if (handshakeBuffer.length >= 16) {
+                        const startBig = handshakeBuffer.readBigUInt64BE(0);
+                        const endBig = handshakeBuffer.readBigUInt64BE(8);
+                        const start = Number(startBig);
+                        const end = Number(endBig);
+                        socket.off('data', onData);
+                        this.streamRange(socket, start, end, onProgress);
                     }
                 };
                 socket.on('data', onData);
-                socket.on('close', () => {
-                    this.activeSockets.delete(socket);
-                });
-                socket.on('error', (err) => {
-                    console.error('[Sender] Socket error:', err);
-                });
+                socket.on('close', () => this.activeSockets.delete(socket));
+                socket.on('error', (err) => console.error('[Sender] Socket error:', err));
             });
+            this.server.on('error', (err) => reject(err));
             this.server.listen(0, '0.0.0.0', () => {
                 const address = this.server?.address();
                 if (address && typeof address !== 'string') {
@@ -66,7 +56,7 @@ export class FileSender {
         const readStream = fs.createReadStream(this.filePath, {
             start,
             end: end - 1,
-            highWaterMark: 1024 * 1024 // 1MB Jumbo Buffer
+            highWaterMark: 512 * 1024 // Balanced 512KB Buffer
         });
         this.activeStreams.add(readStream);
         readStream.on('data', (chunk) => {
@@ -89,7 +79,7 @@ export class FileSender {
         });
         readStream.on('end', () => {
             this.activeStreams.delete(readStream);
-            if (this.bytesSent >= this.totalBytes) {
+            if (this.bytesSent >= this.totalBytes && this.activeStreams.size === 0) {
                 onProgress({
                     transferId: this.transferId,
                     bytesTransferred: this.totalBytes,
@@ -127,7 +117,8 @@ export class FileReceiver {
     lastReportTime = 0;
     lastReportBytes = 0;
     inFlightWrites = 0;
-    streamCount = 4;
+    streamCount = 4; // Balanced Concurrency
+    streamsEnded = 0;
     receive(senderIp, senderPort, savePath, totalBytes, transferId, onProgress) {
         this.savePath = savePath;
         this.totalBytes = totalBytes;
@@ -136,6 +127,7 @@ export class FileReceiver {
         this.lastReportTime = Date.now();
         this.lastReportBytes = 0;
         this.inFlightWrites = 0;
+        this.streamsEnded = 0;
         return new Promise((resolve, reject) => {
             try {
                 this.fileDescriptor = fs.openSync(this.savePath, 'w');
@@ -144,39 +136,69 @@ export class FileReceiver {
                 return reject(e);
             }
             const segmentSize = Math.ceil(this.totalBytes / this.streamCount);
-            let streamsEnded = 0;
             for (let i = 0; i < this.streamCount; i++) {
                 const start = i * segmentSize;
                 const end = Math.min((i + 1) * segmentSize, this.totalBytes);
                 if (start >= this.totalBytes) {
-                    streamsEnded++;
+                    this.handleStreamEnd(onProgress, resolve);
                     continue;
                 }
                 const socket = new net.Socket();
                 socket.setNoDelay(true);
                 this.sockets.add(socket);
                 socket.connect(senderPort, senderIp, () => {
-                    socket.write(JSON.stringify({ start, end, transferId }) + '\n');
+                    const header = Buffer.allocUnsafe(16);
+                    header.writeBigUInt64BE(BigInt(start), 0);
+                    header.writeBigUInt64BE(BigInt(end), 8);
+                    socket.write(header);
                 });
+                let streamBuffer = Buffer.allocUnsafe(512 * 1024); // Balanced 512KB Block
+                let streamBufferLen = 0;
                 let currentWriteOffset = start;
-                socket.on('data', (chunk) => {
-                    if (this.fileDescriptor === null)
+                const flushStreamBuffer = () => {
+                    if (this.fileDescriptor === null || streamBufferLen === 0)
                         return;
-                    this.inFlightWrites++;
+                    const dataToWrite = Buffer.allocUnsafe(streamBufferLen);
+                    streamBuffer.copy(dataToWrite, 0, 0, streamBufferLen);
                     const fd = this.fileDescriptor;
-                    const offsetAtCall = currentWriteOffset;
-                    // Use Async fs.write for true parallel disk IO
-                    fs.write(fd, chunk, 0, chunk.length, offsetAtCall, (err) => {
+                    const pos = currentWriteOffset;
+                    this.inFlightWrites++;
+                    fs.write(fd, dataToWrite, 0, dataToWrite.length, pos, (_err) => {
                         this.inFlightWrites--;
-                        if (err) {
-                            console.error('[Receiver] Async write error:', err);
-                        }
-                        // Check if we are done after every write flush
-                        if (streamsEnded >= this.streamCount && this.inFlightWrites === 0) {
+                        if (this.streamsEnded >= this.streamCount && this.inFlightWrites === 0) {
                             this.finish(onProgress, resolve);
                         }
                     });
-                    currentWriteOffset += chunk.length;
+                    currentWriteOffset += streamBufferLen;
+                    streamBufferLen = 0;
+                };
+                socket.on('data', (chunk) => {
+                    if (this.fileDescriptor === null)
+                        return;
+                    if (streamBufferLen + chunk.length <= streamBuffer.length) {
+                        chunk.copy(streamBuffer, streamBufferLen);
+                        streamBufferLen += chunk.length;
+                    }
+                    else {
+                        flushStreamBuffer();
+                        if (chunk.length > streamBuffer.length) {
+                            const fd = this.fileDescriptor;
+                            const pos = currentWriteOffset;
+                            const directChunk = Buffer.from(chunk);
+                            this.inFlightWrites++;
+                            fs.write(fd, directChunk, 0, directChunk.length, pos, (_err) => {
+                                this.inFlightWrites--;
+                                if (this.streamsEnded >= this.streamCount && this.inFlightWrites === 0) {
+                                    this.finish(onProgress, resolve);
+                                }
+                            });
+                            currentWriteOffset += chunk.length;
+                        }
+                        else {
+                            chunk.copy(streamBuffer, 0);
+                            streamBufferLen = chunk.length;
+                        }
+                    }
                     this.bytesReceived += chunk.length;
                     const now = Date.now();
                     if (now - this.lastReportTime >= 1500) {
@@ -195,17 +217,22 @@ export class FileReceiver {
                     }
                 });
                 socket.on('end', () => {
-                    streamsEnded++;
-                    if (streamsEnded >= this.streamCount && this.inFlightWrites === 0) {
-                        this.finish(onProgress, resolve);
-                    }
+                    flushStreamBuffer();
+                    this.handleStreamEnd(onProgress, resolve);
                 });
                 socket.on('error', (err) => {
+                    console.error(`[Receiver] Socket error for stream ${i}:`, err);
                     this.pause();
                     reject(err);
                 });
             }
         });
+    }
+    handleStreamEnd(onProgress, resolve) {
+        this.streamsEnded++;
+        if (this.streamsEnded >= this.streamCount && this.inFlightWrites === 0) {
+            this.finish(onProgress, resolve);
+        }
     }
     finish(onProgress, resolve) {
         if (this.fileDescriptor !== null) {
@@ -229,9 +256,11 @@ export class FileReceiver {
         }
     }
     cancel() {
-        this.pause();
-        if (fs.existsSync(this.savePath)) {
+        this.stop();
+        if (fs.existsSync(this.savePath))
             fs.unlinkSync(this.savePath);
-        }
+    }
+    stop() {
+        this.pause();
     }
 }

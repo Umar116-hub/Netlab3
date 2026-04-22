@@ -262,7 +262,7 @@ export const DesktopNetProvider = ({ children }: { children: ReactNode }) => {
                savePath: savePath,
                totalBytes: t.size,
                transferId: t.id
-           });
+           }).catch((err: any) => console.error('[UI] p2p:start-receiver failed:', err));
 
            // Notify sender that we accepted!
            ipcRenderer.invoke('p2p:send-direct-signaling', {
