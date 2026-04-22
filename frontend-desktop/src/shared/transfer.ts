@@ -75,14 +75,14 @@ export class FileSender {
      const readStream = fs.createReadStream(this.filePath, { 
        start, 
        end: end - 1, 
-       highWaterMark: 2 * 1024 * 1024 // Maximum Overdrive 2MB Buffer
+       highWaterMark: 2 * 1024 * 1024 // 2MB Hyper-Buffer
      });
      this.activeStreams.add(readStream);
 
      readStream.on('data', (chunk) => {
         this.bytesSent += chunk.length;
         const now = Date.now();
-        if (now - this.lastReportTime >= 1500) {
+        if (now - this.lastReportTime >= 1000) { // More frequent UI updates (1s)
            const speed = (this.bytesSent - this.lastReportBytes) / ((now - this.lastReportTime) / 1000);
            const remaining = (this.totalBytes - this.bytesSent) / speed;
            onProgress({
@@ -143,7 +143,7 @@ export class FileReceiver {
   private lastReportTime = 0;
   private lastReportBytes = 0;
   private inFlightWrites = 0;
-  private streamCount = 8; // Maximum Overdrive Concurrency
+  private streamCount = 8; // Apex 8-Lane Concurrency
   private streamsEnded = 0;
 
   receive(
@@ -192,29 +192,32 @@ export class FileReceiver {
           socket.write(header);
         });
 
-        let streamBuffer = Buffer.allocUnsafe(2 * 1024 * 1024); // Maximum Overdrive 2MB Block
+        let streamBuffer = Buffer.allocUnsafe(2 * 1024 * 1024); // 2MB Hyper-Buffer
         let streamBufferLen = 0;
         let currentWriteOffset = start;
 
         const flushStreamBuffer = () => {
            if (this.fileDescriptor === null || streamBufferLen === 0) return;
            
-           const dataToWrite = Buffer.allocUnsafe(streamBufferLen);
-           streamBuffer.copy(dataToWrite, 0, 0, streamBufferLen);
-           
+           // ZERO-COPY SWAP: Pass the current buffer directly to the disk
+           const dataToWrite = streamBuffer;
+           const writeLength = streamBufferLen;
            const fd = this.fileDescriptor;
            const pos = currentWriteOffset;
            
+           // Allocate a fresh buffer instantly so the network doesn't have to wait for the disk!
+           streamBuffer = Buffer.allocUnsafe(2 * 1024 * 1024);
+           streamBufferLen = 0;
+           currentWriteOffset += writeLength;
+           
            this.inFlightWrites++;
-           fs.write(fd, dataToWrite, 0, dataToWrite.length, pos, (_err) => {
+           fs.write(fd, dataToWrite, 0, writeLength, pos, (_err) => {
               this.inFlightWrites--;
+              if (_err) console.error(`[Receiver] Async write error on stream ${i}:`, _err);
               if (this.streamsEnded >= this.streamCount && this.inFlightWrites === 0) {
                  this.finish(onProgress, resolve);
               }
            });
-
-           currentWriteOffset += streamBufferLen;
-           streamBufferLen = 0;
         };
 
         socket.on('data', (chunk) => {
@@ -229,14 +232,16 @@ export class FileReceiver {
                 const fd = this.fileDescriptor;
                 const pos = currentWriteOffset;
                 const directChunk = Buffer.from(chunk);
+                currentWriteOffset += chunk.length;
+                
                 this.inFlightWrites++;
                 fs.write(fd, directChunk, 0, directChunk.length, pos, (_err) => {
                    this.inFlightWrites--;
+                   if (_err) console.error(`[Receiver] Direct write error on stream ${i}:`, _err);
                    if (this.streamsEnded >= this.streamCount && this.inFlightWrites === 0) {
                       this.finish(onProgress, resolve);
                    }
                 });
-                currentWriteOffset += chunk.length;
              } else {
                 chunk.copy(streamBuffer, 0);
                 streamBufferLen = chunk.length;
@@ -245,7 +250,7 @@ export class FileReceiver {
 
           this.bytesReceived += chunk.length;
           const now = Date.now();
-          if (now - this.lastReportTime >= 1500) {
+          if (now - this.lastReportTime >= 1000) { // More frequent UI updates (1s)
              const speed = (this.bytesReceived - this.lastReportBytes) / ((now - this.lastReportTime) / 1000);
              const remaining = (this.totalBytes - this.bytesReceived) / speed;
              onProgress({
