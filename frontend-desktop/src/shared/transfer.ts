@@ -75,7 +75,7 @@ export class FileSender {
      const readStream = fs.createReadStream(this.filePath, { 
        start, 
        end: end - 1, 
-       highWaterMark: 512 * 1024 // Balanced 512KB Buffer
+       highWaterMark: 2 * 1024 * 1024 // Maximum Overdrive 2MB Buffer
      });
      this.activeStreams.add(readStream);
 
@@ -143,7 +143,7 @@ export class FileReceiver {
   private lastReportTime = 0;
   private lastReportBytes = 0;
   private inFlightWrites = 0;
-  private streamCount = 4; // Balanced Concurrency
+  private streamCount = 8; // Maximum Overdrive Concurrency
   private streamsEnded = 0;
 
   receive(
@@ -192,7 +192,7 @@ export class FileReceiver {
           socket.write(header);
         });
 
-        let streamBuffer = Buffer.allocUnsafe(512 * 1024); // Balanced 512KB Block
+        let streamBuffer = Buffer.allocUnsafe(2 * 1024 * 1024); // Maximum Overdrive 2MB Block
         let streamBufferLen = 0;
         let currentWriteOffset = start;
 
