@@ -176,13 +176,16 @@ export function TransferProvider({ children }: { children: ReactNode }) {
         signalingRef.current(msg.sender_id, msg.payload);
       } else if (msg.type === 'file_offer') {
         const o = msg as unknown as FileTransferSignaling;
-        console.log(`[P2P] File offer: "${o.file_info.name}" from ${o.sender_id}`);
+        const fromId = msg.from || msg.sender_id;
+        console.log(`[P2P] File offer: "${o.file_info.name}" from ${fromId}`);
+        if (!fromId) return;
+        
         setTransfers(prev => {
           if (prev.some(t => t.id === o.file_info.transfer_id)) return prev;
           return [...prev, {
             id: o.file_info.transfer_id, name: o.file_info.name,
             size: o.file_info.size, progress: 0, status: 'pending' as const,
-            direction: 'receiving' as const, peerId: o.sender_id,
+            direction: 'receiving' as const, peerId: fromId,
           }];
         });
       } else if (msg.type === 'file_pause') {
@@ -213,8 +216,14 @@ export function TransferProvider({ children }: { children: ReactNode }) {
       sendRef.current({ type: 'webrtc_signaling', recipient_id: peerId, payload: { type: 'candidate', payload: e.candidate } });
 
       // mDNS bypass - Prioritize detected IP from server, then fallback to current location
-      const host = myIp || window.location.hostname;
+      const isLoopback = myIp === '127.0.0.1' || myIp === '::1' || myIp === 'localhost';
+      const host = (myIp && !isLoopback) ? myIp : window.location.hostname;
+      
       if (ip.endsWith('.local') && (myIp || /^(\d{1,3}\.){3}\d{1,3}$/.test(host))) {
+        if (host === 'localhost' || host === '127.0.0.1') {
+           // Skip replacement if we still only have localhost - others can't connect to it
+           return;
+        }
         sendRef.current({
           type: 'webrtc_signaling', recipient_id: peerId,
           payload: { type: 'candidate', payload: { candidate: e.candidate.candidate.replace(ip, host), sdpMid: e.candidate.sdpMid, sdpMLineIndex: e.candidate.sdpMLineIndex } },
@@ -336,9 +345,9 @@ export function TransferProvider({ children }: { children: ReactNode }) {
           ch.close();
         });
       } else {
-        // Blob Chunking fallback: spill every 50MB to reduce RAM
+        // Blob Chunking fallback: spill every 10MB to reduce RAM (safer for mobile)
         chunks.push(buf);
-        if (currentChunkBytes >= 50 * 1024 * 1024) {
+        if (currentChunkBytes >= 10 * 1024 * 1024) {
           blobParts.push(new Blob(chunks));
           chunks = [];
           currentChunkBytes = 0;
